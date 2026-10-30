@@ -57,6 +57,9 @@ collector/sofascore-collector.js  função ligaRecordCollector(); a app gera com
 js/pdf-import.js               lê os PDFs no browser (pdf.js 3.11.174 da cdnjs, worker na própria página); igual ao parser Python
 pdfs/                          guardar aqui os PDFs semanais (botão "Atualizar pontuações (PDFs)" lê esta pasta)
 scripts/serve.js               servidor local opcional (node scripts/serve.js . 8765)
+manifest.json, sw.js, icons/   app instalável no telemóvel (Android: "Adicionar ao ecrã principal"); sw = rede primeiro, cache offline
+data/sync.json                 gerado pelo botão "Publicar" (PC): dados + plantel; o site no telemóvel aplica-o ao abrir se for mais recente
+publicar.bat                   git add/commit/push → GitHub Pages (o .gitignore exclui pdfs/ porque os emails têm nome e email do utilizador)
 scripts/parse_pontuacoes.py    PDFs "Liga Record - Pontuações" → data/pontuacoes.json (pdfplumber)
 data/pontuacoes.json           pontuações oficiais por ronda (todos os jogadores e treinadores)
 ```
