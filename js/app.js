@@ -164,7 +164,9 @@
 
   function renderOnze() {
     const el = $('#onze');
-    if (!S.data) { el.innerHTML = `<div class="card empty">Carrega o ficheiro de dados do Sofascore (ver "Como usar").</div>`; return; }
+    if (!S.data) { el.innerHTML = /^https?:$/.test(location.protocol) && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)
+      ? `<div class="card empty"><span class="ic">📲</span>Ainda não há dados publicados.<br>No PC: atualiza o Sofascore e as Pontuações, carrega em <b>Telemóvel → Publicar</b> e corre <b>publicar.bat</b>. Depois volta a abrir esta app.</div>`
+      : `<div class="card empty"><span class="ic">⚽</span>Sem dados ainda. Carrega em <b>Sofascore → Atualizar</b> no topo (ver "Como usar").</div>`; return; }
     const sq = squadPlayers();
     const best = LRModel.bestXI(sq);
     if (!best) { el.innerHTML = `<div class="card empty">Plantel incompleto — confirma os jogadores no separador Plantel.</div>`; return; }
