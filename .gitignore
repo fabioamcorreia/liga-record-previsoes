@@ -1,0 +1,7 @@
+# Os PDFs são os emails da Liga Record e têm o teu nome e email: não vão para o site público.
+pdfs/
+# Configuração local do Claude Code
+.claude/
+# Ficheiros temporários
+data/_*
+node_modules/

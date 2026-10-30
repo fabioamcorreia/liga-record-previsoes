@@ -1,0 +1,15 @@
+{
+  "name": "Liga Record – Previsões",
+  "short_name": "Liga Record",
+  "description": "Onze, capitão, suplentes, treinador e transferências para a Liga Record.",
+  "lang": "pt-PT",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#10141c",
+  "theme_color": "#10141c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
