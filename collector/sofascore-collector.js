@@ -226,6 +226,22 @@ async function ligaRecordCollector() {
         out.events.push({ id: e.id, ts: e.startTimestamp, round: r0, home: t(e.homeTeam), away: t(e.awayTeam),
           odds: ft ? { h: c['1'], d: c['X'], a: c['2'] } : null, over25: g.Over || null, under25: g.Under || null });
       }
+      // estatísticas jogo a jogo das jornadas já jogadas (xG, xA, remates, defesas…) para o modelo da Champions
+      out.stats = [];
+      for (let rd = 1; rd < (r0 || 1); rd++) {
+        const ev = await api(`unique-tournament/7/season/${s.id}/events/round/${rd}`);
+        for (const e of (ev?.events || []).filter(e => e.status?.type === 'finished')) {
+          const l = await api(`event/${e.id}/lineups`); if (!l) continue;
+          for (const side of ['home', 'away']) {
+            const tm = side === 'home' ? e.homeTeam : e.awayTeam;
+            for (const p of l[side]?.players || []) {
+              const x = p.statistics || {}; if (!x.minutesPlayed) continue;
+              out.stats.push([rd, p.player.name, p.player.shortName, tm.name, tm.nameCode, p.position || p.player.position, x.minutesPlayed,
+                +(x.expectedGoals || 0).toFixed(3), +(x.expectedAssists || 0).toFixed(3), x.totalShots || 0, x.saves || 0, x.keyPass || 0]);
+            }
+          }
+        }
+      }
     } catch (e) { /* sem Champions: o modo Liga Record funciona na mesma */ }
     return out;
   }

@@ -26,6 +26,9 @@ const UCLModel = (() => {
   const PLAY = { G: [[6, 0.95], [5, 0.75], [0, 0.2]], D: [[6, 0.9], [5, 0.68], [4, 0.45], [0, 0.5]], M: [[8, 0.88], [7, 0.8], [6, 0.68], [5, 0.55], [0, 0.4]], F: [[8, 0.85], [6, 0.74], [5, 0.35], [0, 0.5]] };
   const K = 6; // peso do prior, em jogos de 90' (backtest J1-J3: 6 dá o menor erro)
   let FORM_W = 0; // peso da forma (pts/jogo nos últimos 3) misturada no esperado
+  // xG/xA do Sofascore (jogos da Champions): contam como golos/assistências "de prova" com este peso (backtest J2-J3)
+  // (golos e assistências da UEFA + XW × xG/xA). J2-J3: neutro para golos (log-veros. −400,3 → −400,1), ligeiro ganho nos AV; assist. ~0.
+  let XW = { g: 1, a: 0.5 };
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
   const pois = (l, k) => { let f = 1; for (let i = 2; i <= k; i++) f *= i; return Math.exp(-l) * Math.pow(l, k) / f; };
@@ -122,8 +125,37 @@ const UCLModel = (() => {
     return f;
   }
 
+  // Índice das estatísticas do Sofascore por jogador: linhas [jornada, nome, nome curto, equipa, código, pos, min, xG, xA, …]
+  function sofaIndex(rows) {
+    const by = new Map(), byCode = new Map(), byName = new Map();
+    for (const r of rows || []) {
+      const [md, name, short, , code] = r, k = norm(code) + '|' + norm(name);
+      let e = by.get(k);
+      if (!e) {
+        e = { name: norm(name), short: norm(short), code: norm(code), md: {} }; by.set(k, e);
+        (byCode.get(e.code) || byCode.set(e.code, []).get(e.code)).push(e); (byName.get(e.name) || byName.set(e.name, []).get(e.name)).push(e);
+      }
+      const m = e.md[md] ||= { xg: 0, xa: 0 }; m.xg += r[7]; m.xa += r[8];
+    }
+    return { by, byCode, byName };
+  }
+  // os códigos das equipas diferem (UEFA "BAY", Sofascore "FCB"): liga-as pelos nomes dos jogadores em comum
+  function sofaTeams(ix, players) {
+    const votes = {};
+    for (const p of players) for (const e of ix.byName.get(norm(p.name)) || []) { const v = (votes[p.tId] ||= {}); v[e.code] = (v[e.code] || 0) + 1; }
+    return Object.fromEntries(Object.entries(votes).map(([t, v]) => [t, Object.entries(v).sort((a, b) => b[1] - a[1])[0][0]]));
+  }
+  function sofaFind(ix, p, code) {
+    if (!ix || !code) return null;
+    const n = norm(p.name), list = ix.byCode.get(code) || [];
+    const last = n.split(' ').pop();
+    return ix.by.get(code + '|' + n) || list.find(e => e.name.endsWith(' ' + last) && e.name[0] === n[0]) || list.find(e => e.name.includes(n) || n.includes(e.name))
+      || (list.filter(e => e.name.split(' ').pop() === last).length === 1 ? list.find(e => e.name.split(' ').pop() === last) : null);
+  }
+
   function project(data, sofaUcl, opts = {}) {
     const G = games(data, sofaUcl), avail = opts.availOverride || {};
+    const six = sofaUcl?.stats?.length ? sofaIndex(sofaUcl.stats) : null, steam = six ? sofaTeams(six, data.players) : {};
     const out = [];
     // jogos já disputados por cada equipa (para contar quem não jogou)
     const teamMds = {};
@@ -146,10 +178,13 @@ const UCLModel = (() => {
       const p60 = pPlay * p60c, expMin = pPlay * minIfPlay;
       const sum = k => played.reduce((s, x) => s + (x[k] || 0), 0);
       const rate = (k, prior) => (sum(k) + K * prior) / (mins / 90 + K); // por 90'
+      // com xG/xA: (golos + XW·xG + K·prior) / ((1 + XW)·jogos de 90' + K)
+      const sx = sofaFind(six, p, steam[p.tId]), xsum = k => played.reduce((s, x) => s + (sx?.md[x.md]?.[k] || 0), 0);
+      const rateX = (k, xk, prior, w) => (sx && w ? (sum(k) + w * xsum(xk) + K * prior) / ((1 + w) * mins / 90 + K) : rate(k, prior));
       // ataque face ao habitual da equipa (não face à média da prova: senão a força da equipa contava duas vezes)
       const attack = g.lf / g.typ, defence = g.la_ / LG;
-      const eg = rate('g', byPrice('g', p)) * expMin / 90 * attack;
-      const ea = rate('a', byPrice('a', p)) * expMin / 90 * attack;
+      const eg = rateX('g', 'xg', byPrice('g', p), XW.g) * expMin / 90 * attack;
+      const ea = rateX('a', 'xa', byPrice('a', p), XW.a) * expMin / 90 * attack;
       const Pg = 1 - Math.exp(-eg);
       const cs = Math.exp(-g.la_);
       let pts = pPlay * 1 + p60 * 1 + eg * GOAL[p.pos] + ea * 3 + p60 * cs * CS[p.pos];
@@ -178,7 +213,7 @@ const UCLModel = (() => {
         rest: (brPts + svPts) / pPlay - rate('y', PRIOR.y[p.pos]) * minIfPlay / 90 - 0.015, mom: pMom / pPlay, match: g.id, home: g.isHome, lf: g.lf, la: g.la_ } : null;
       out.push({ id: p.id, name: p.name, short: p.short, team: p.team, teamId: p.tId, code: p.code, pos: p.pos, price: p.price,
         opp: (g.isHome ? 'vs ' : '@ ') + g.opp.name, home: g.isHome, ts: g.ts, pts, pPlay, p60, expMin, minIfPlay, last,
-        eg, ea, Pg, Pa: 1 - Math.exp(-ea), cs, pCS: p.pos === 'F' ? 0 : p60 * cs, pw: g.pw, la: g.la_, lf: g.lf, pMom, form, formN: recent.length, sim,
+        eg, ea, Pg, Pa: 1 - Math.exp(-ea), xg90: sx && mins ? xsum('xg') / mins * 90 : null, xa90: sx && mins ? xsum('xa') / mins * 90 : null, cs, pCS: p.pos === 'F' ? 0 : p60 * cs, pw: g.pw, la: g.la_, lf: g.lf, pMom, form, formN: recent.length, sim,
         status: STATUS[p.status] || (/unlikely/i.test(p.trained) ? 'Provável suplente' : ''), sel: p.sel, tot: p.tot,
         avgPts: realPts.length ? realPts.reduce((s, v) => s + v, 0) / realPts.length : null, games: played.length });
     }
@@ -439,8 +474,8 @@ const UCLModel = (() => {
     return { base, steps, ev: prev };
   }
 
-  // Projeção de uma jornada futura da fase de liga (sem odds: força das equipas pelos preços)
-  const projectMd = (data, md, sofaUcl) => project({ ...data, meta: { ...data.meta, md } }, md === data.meta.md ? sofaUcl : null);
+  // Projeção de uma jornada futura da fase de liga (sem odds: força das equipas pelos preços; o xG/xA conta na mesma)
+  const projectMd = (data, md, sofaUcl) => project({ ...data, meta: { ...data.meta, md } }, md === data.meta.md ? sofaUcl : sofaUcl?.stats ? { stats: sofaUcl.stats } : null);
   // jogadores com os pontos somados de várias jornadas (para escolher um plantel para um período)
   function combine(projs) {
     const by = {};
@@ -487,6 +522,6 @@ const UCLModel = (() => {
   }
 
   return { project, projectMd, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, improveSquad, explainChanges, seasonPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
-    setFormW: w => { FORM_W = w; } };
+    setFormW: w => { FORM_W = w; }, setXW: (g, a) => { XW = { g, a }; } };
 })();
 if (typeof module !== 'undefined') module.exports = UCLModel;
