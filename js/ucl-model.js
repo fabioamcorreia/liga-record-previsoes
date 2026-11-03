@@ -12,6 +12,9 @@ const UCLModel = (() => {
   // Médias reais da época por 90' (jornadas 1-3, 1686 exibições), usadas quando o jogador tem poucos minutos.
   // A Champions 2026/27 tem 4,09 golos por jogo → LG = 2,05 golos por equipa.
   const LG = 2.05;
+  // As odds subestimam os golos desta Champions: jornadas 1-3 previam 186 golos e houve 221 (baliza a zero prevista 22,5%, real 16,7%).
+  // Corrige-se o que cada equipa sofre (baliza a zero, golos sofridos, vitória/empate).
+  const ODDS_K = 1.19;
   const PRIOR = { br: { G: 0.3, D: 5.1, M: 3.3, F: 1.4 }, y: { G: 0.02, D: 0.125, M: 0.116, F: 0.092 }, gob: { G: 0, D: 0.06, M: 0.21, F: 0.09 },
     svPts: 0.7 }; // pontos de defesas por jogo do GR (o ficheiro da UEFA não traz as defesas: deduzem-se dos pontos)
   // O preço da Fantasy prevê muito bem golos, assistências e homem do jogo (ajuste de Poisson nas jornadas 1-3):
@@ -22,6 +25,7 @@ const UCLModel = (() => {
   // sem jogos da equipa (1.ª jornada): probabilidade de jogar pelo preço (observado nas jornadas 1-3)
   const PLAY = { G: [[6, 0.95], [5, 0.75], [0, 0.2]], D: [[6, 0.9], [5, 0.68], [4, 0.45], [0, 0.5]], M: [[8, 0.88], [7, 0.8], [6, 0.68], [5, 0.55], [0, 0.4]], F: [[8, 0.85], [6, 0.74], [5, 0.35], [0, 0.5]] };
   const K = 6; // peso do prior, em jogos de 90' (backtest J1-J3: 6 dá o menor erro)
+  let FORM_W = 0; // peso da forma (pts/jogo nos últimos 3) misturada no esperado
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
   const pois = (l, k) => { let f = 1; for (let i = 2; i <= k; i++) f *= i; return Math.exp(-l) * Math.pow(l, k) / f; };
@@ -82,7 +86,7 @@ const UCLModel = (() => {
     for (const m of mdx?.matches || []) {
       const ev = matchEvent(m, sofaUcl?.events);
       let lh, la, src;
-      if (ev?.odds?.h) { const r = lambdasFromOdds(ev.odds, ev.over25, ev.under25); lh = r.lh; la = r.la; src = 'odds'; }
+      if (ev?.odds?.h) { const r = lambdasFromOdds(ev.odds, ev.over25, ev.under25); lh = r.lh * ODDS_K; la = r.la * ODDS_K; src = 'odds'; }
       else {
         const rh = (tp.pw[m.home.id] || tp.avg) / tp.avg, ra = (tp.pw[m.away.id] || tp.avg) / tp.avg;
         lh = LG * Math.pow(rh, 1.3) / Math.pow(ra, 0.9) * 1.1; la = LG * Math.pow(ra, 1.3) / Math.pow(rh, 0.9) * 0.9; src = 'preços';
@@ -93,8 +97,10 @@ const UCLModel = (() => {
       const g = { id: m.id, ts, home: m.home, away: m.away, lh, la, pHome: pw, pDraw: pd, pAway: 1 - pw - pd, src };
       // typ = golos habituais da equipa (contra um adversário médio): o preço do jogador já os reflete
       const typ = id => LG * Math.pow((tp.pw[id] || tp.avg) / tp.avg, 1.3);
-      out[m.home.id] = { ...g, me: m.home, opp: m.away, isHome: true, lf: lh, la_: la, pw, pl: 1 - pw - pd, typ: typ(m.home.id) };
-      out[m.away.id] = { ...g, me: m.away, opp: m.home, isHome: false, lf: la, la_: lh, pw: 1 - pw - pd, pl: pw, typ: typ(m.away.id) };
+      // o ataque dos jogadores foi calibrado com os golos das odds sem a correção (P(golo) bate certo assim)
+      const atk = src === 'odds' ? 1 / ODDS_K : 1;
+      out[m.home.id] = { ...g, me: m.home, opp: m.away, isHome: true, lf: lh * atk, la_: la, pw, pl: 1 - pw - pd, typ: typ(m.home.id) };
+      out[m.away.id] = { ...g, me: m.away, opp: m.home, isHome: false, lf: la * atk, la_: lh, pw: 1 - pw - pd, pl: pw, typ: typ(m.away.id) };
     }
     return out;
   }
@@ -132,7 +138,7 @@ const UCLModel = (() => {
       const w = [0.5, 0.3, 0.2].slice(0, last.length), ws = w.reduce((s, v) => s + v, 0) || 1;
       let pPlay = last.length ? last.reduce((s, m, i) => s + (m > 0 ? w[i] : 0), 0) / ws : PLAY[p.pos].find(([t]) => p.price >= t)[1];
       if (last.length && last[0] === 0) pPlay *= 0.7;
-      pPlay = Math.min(pPlay, 0.92) * statusFactor(p); // backtest: titulares "certos" jogaram 81-89% das vezes
+      pPlay = Math.min(pPlay, 0.86) * statusFactor(p); // backtest J1-J3: quem jogou os últimos jogos todos jogou 83% das vezes
       if (avail[p.id] != null) pPlay = avail[p.id];
       const played = h.filter(x => x.min > 0), mins = played.reduce((s, x) => s + x.min, 0);
       const minIfPlay = played.length ? played.reduce((s, x) => s + x.min, 0) / played.length : (p.pos === 'G' ? 90 : pPlay > 0.6 ? 80 : 55);
@@ -162,9 +168,18 @@ const UCLModel = (() => {
       const pMom = clamp((sum('mom') + K * byPrice('mom', p)) / (played.length + K) * pPlay * (0.55 + g.pw), 0, 0.6);
       pts += 3 * pMom;
       const realPts = played.map(x => x.pts).filter(v => v != null);
+      // forma: pontos por jogo nos últimos 3 jogos em que jogou (só se mostra; o backtest não lhe dá peso, ver FORM_W)
+      const recent = played.slice().sort((a, b) => b.md - a.md).slice(0, 3).map(x => x.pts).filter(v => v != null);
+      const form = recent.length ? recent.reduce((s, v) => s + v, 0) / recent.length : null;
+      if (FORM_W && form != null) pts = (1 - FORM_W) * pts + FORM_W * pPlay * form;
+      const gobFrac = (sum('g') + 2 * PRIOR.gob[p.pos]) / (sum('g') + 2);
+      // para a simulação jogo a jogo: o que vale cada evento se ele jogar
+      const sim = pPlay > 0 ? { pp: pPlay, p60c, g: eg / pPlay, gv: GOAL[p.pos] + gobFrac, a: ea / pPlay, csv: CS[p.pos], gc: p.pos === 'G' || p.pos === 'D',
+        rest: (brPts + svPts) / pPlay - rate('y', PRIOR.y[p.pos]) * minIfPlay / 90 - 0.015, mom: pMom / pPlay, match: g.id, home: g.isHome, lf: g.lf, la: g.la_ } : null;
       out.push({ id: p.id, name: p.name, short: p.short, team: p.team, teamId: p.tId, code: p.code, pos: p.pos, price: p.price,
         opp: (g.isHome ? 'vs ' : '@ ') + g.opp.name, home: g.isHome, ts: g.ts, pts, pPlay, p60, expMin, minIfPlay, last,
-        eg, ea, Pg, cs, pw: g.pw, la: g.la_, pMom, status: STATUS[p.status] || (/unlikely/i.test(p.trained) ? 'Provável suplente' : ''), sel: p.sel, tot: p.tot,
+        eg, ea, Pg, Pa: 1 - Math.exp(-ea), cs, pCS: p.pos === 'F' ? 0 : p60 * cs, pw: g.pw, la: g.la_, lf: g.lf, pMom, form, formN: recent.length, sim,
+        status: STATUS[p.status] || (/unlikely/i.test(p.trained) ? 'Provável suplente' : ''), sel: p.sel, tot: p.tot,
         avgPts: realPts.length ? realPts.reduce((s, v) => s + v, 0) / realPts.length : null, games: played.length });
     }
     return { players: out, games: G };
@@ -195,6 +210,150 @@ const UCLModel = (() => {
       total: best.tot + captain.pts };
   }
 
+  // ---------- jornada simulada com as substituições entre dias ----------
+  // Na UEFA contam os 11 que ACABAM a jornada no onze. Depois de cada dia podes tirar até 4 titulares (os que saem ficam
+  // com 0) e pôr suplentes que ainda não jogaram, e passar a braçadeira a quem ainda não jogou. Sem mudanças manuais há
+  // substituições automáticas (quem não jogou → 1.º suplente que jogou, sem estragar a tática). A tática não se escolhe:
+  // é a que resultar das trocas (1 GR, ≥3 DEF, ≥2 MED, ≥1 AV). Monte Carlo com cenários fixos por jogador e por jogo
+  // (números aleatórios comuns: comparar dois onzes usa os mesmos cenários).
+  const NSIM = 800;
+  const rng = seed => { let s = (seed >>> 0) || 1; return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; }; };
+  const hash = x => Math.imul((+x || 0) ^ 0x5bd1e995, 2654435761) >>> 0;
+  const poisS = (l, u) => { let k = 0, p = Math.exp(-l), c = p; while (u > c && k < 12) { k++; p *= l / k; c += p; } return k; };
+  const teamSim = new Map(), plSim = new WeakMap();
+  function matchGoals(m) { // golos (casa, fora) do jogo em cada cenário
+    const lh = m.home ? m.lf : m.la, la = m.home ? m.la : m.lf, key = `${m.match}|${lh.toFixed(3)}|${la.toFixed(3)}`;
+    let t = teamSim.get(key);
+    if (!t) { const r = rng(hash(m.match) ^ 0x2545f491); t = { h: new Uint8Array(NSIM), a: new Uint8Array(NSIM) }; for (let i = 0; i < NSIM; i++) { t.h[i] = poisS(lh, r()); t.a[i] = poisS(la, r()); } teamSim.set(key, t); }
+    return t;
+  }
+  function samples(p) {
+    const key = p.sim || p; let s = plSim.get(key); if (s) return s;
+    s = { pts: new Float32Array(NSIM), plays: new Uint8Array(NSIM) };
+    const m = p.sim;
+    if (m) {
+      const T = matchGoals(m), r = rng(hash(p.id));
+      for (let i = 0; i < NSIM; i++) {
+        const u = r(), full = r() < m.p60c, ug = r(), ua = r(), um = r();
+        if (u >= m.pp) continue;
+        const ga = m.home ? T.a[i] : T.h[i];
+        let v = 1 + (full ? 1 : 0) + poisS(m.g, ug) * m.gv + 3 * poisS(m.a, ua) + m.rest + (um < m.mom ? 3 : 0);
+        if (full && ga === 0) v += m.csv;
+        if (m.gc) v -= Math.floor((full ? ga : Math.round(ga * 0.4)) / 2);
+        s.pts[i] = v; s.plays[i] = 1;
+      }
+    }
+    plSim.set(key, s); return s;
+  }
+  const dayKey = ts => new Date(ts).toDateString();
+
+  // Prepara um plantel para simular: dia de cada jogador (0 = 1.º dia da jornada), valor esperado se jogar, cenários
+  function prep(sq) {
+    const days = [...new Set(sq.map(p => dayKey(p.ts)))].sort((a, b) => new Date(a) - new Date(b));
+    const P = {};
+    for (const p of sq) P[p.id] = { p, pos: p.pos, pts: p.pts, vPlay: p.pPlay > 0 ? p.pts / p.pPlay : 0, day: days.indexOf(dayKey(p.ts)), S: samples(p) };
+    return { P, nDays: days.length, days };
+  }
+  const okSwap = (P, xi, o, b) => {
+    if ((P[o].pos === 'G') !== (P[b].pos === 'G')) return false;
+    if (P[o].pos === P[b].pos || P[o].pos === 'G') return true;
+    let d = 0, m = 0, f = 0;
+    for (const id of xi) { const k = id === o ? P[b].pos : P[id].pos; if (k === 'D') d++; else if (k === 'M') m++; else if (k === 'F') f++; }
+    return d >= 3 && m >= 2 && f >= 1;
+  };
+  // Pontuação final de um onze (com os valores conhecidos `val` e quem jogou `plays`), com ou sem substituições automáticas
+  function finalScore(P, xi, bench, cap, auto, val, plays) {
+    let tot = 0, capOk = false;
+    if (!auto) { for (const id of xi) tot += val(id); return tot + (cap != null && plays(cap) ? val(cap) : 0); }
+    const used = new Set(), cur = xi.slice();
+    for (let j = 0; j < cur.length; j++) {
+      const id = cur[j]; if (plays(id)) continue;
+      for (const b of bench) if (!used.has(b) && !cur.includes(b) && plays(b) && okSwap(P, cur, id, b)) { used.add(b); cur[j] = b; break; }
+    }
+    for (const id of cur) tot += val(id);
+    capOk = cur.includes(cap) && plays(cap);
+    return tot + (capOk ? val(cap) : 0);
+  }
+  // Um cenário: decisões em cada intervalo entre dias, com o que se sabe nesse momento
+  function playScenario(i, sp, L, noSubs) {
+    const { P, nDays } = sp;
+    let xi = L.xi.slice(), cap = L.captain, auto = true;
+    const real = id => P[id].S.pts[i], played = id => P[id].S.plays[i] === 1;
+    const out = new Set(), bench = L.bench;
+    if (!noSubs) for (let k = 0; k < nDays - 1; k++) {
+      // no intervalo a seguir ao dia k: sabe-se o resultado de quem já jogou e (pelos onzes iniciais) quem joga no dia seguinte
+      const val = id => (P[id].day <= k ? real(id) : P[id].day === k + 1 ? (played(id) ? P[id].vPlay : 0) : P[id].pts);
+      const plays = id => (P[id].day <= k + 1 ? played(id) : true);
+      const yet = id => P[id].day > k;
+      const xi2 = xi.slice(), gone = []; let cap2 = cap, n = 0;
+      const greedy = () => {
+        while (n < 4) {
+          let best = null;
+          for (const o of xi2) {
+            if (o === cap2) continue;
+            const vo = val(o);
+            for (const b of bench) if (yet(b) && !out.has(b) && !xi2.includes(b)) { const g = val(b) - vo; if (g > 0.01 && (!best || g > best.g) && okSwap(P, xi2, o, b)) best = { o, b, g }; }
+          }
+          if (!best) return;
+          xi2[xi2.indexOf(best.o)] = best.b; out.add(best.o); gone.push(best.o); n++;
+        }
+      };
+      greedy();
+      // braçadeira: se o capitão já jogou (ou não vai jogar), passa para quem ainda não jogou se valer mais
+      if (P[cap2].day <= k || !plays(cap2)) {
+        const keep = P[cap2].day <= k ? real(cap2) : 0;
+        let nc = null; for (const id of xi2) if (yet(id) && plays(id) && (!nc || val(id) > val(nc))) nc = id;
+        if (nc && val(nc) > keep + 0.01) { cap2 = nc; greedy(); }
+      }
+      const changed = cap2 !== cap || xi2.some((id, j) => id !== xi[j]);
+      if (changed && (!auto || finalScore(P, xi2, bench, cap2, false, val, plays) > finalScore(P, xi, bench, cap, true, val, plays) + 0.01)) { xi = xi2; cap = cap2; auto = false; }
+      else gone.forEach(id => out.delete(id)); // não fez as trocas
+    }
+    return finalScore(P, xi, bench, cap, auto, real, played);
+  }
+  function evalLineup(sp, L, { noSubs = false, n = NSIM } = {}) {
+    let s = 0; for (let i = 0; i < n; i++) s += playScenario(i, sp, L, noSubs); return s / n;
+  }
+
+  // Pontos que um onze faria com os resultados reais (rec(id) → {pts, min}), decidindo as trocas como o plano
+  function realize(sq, L, rec, noSubs = false) {
+    const sp = prep(sq), P = {};
+    for (const [id, x] of Object.entries(sp.P)) { const r = rec(+id); P[id] = { ...x, S: { pts: [r?.pts ?? 0], plays: [(r?.min || 0) > 0 ? 1 : 0] } }; }
+    return playScenario(0, { ...sp, P }, L, noSubs || sp.nDays < 2);
+  }
+
+  // Melhor onze inicial para a jornada com substituições: parte do melhor onze esperado e troca titular↔suplente
+  // ou capitão enquanto a simulação melhorar. Devolve também as regras de troca para o intervalo.
+  function plan(sq, opts = {}) {
+    const b0 = bestXI(sq); if (!b0) return null;
+    const sp = prep(sq), n = opts.n || NSIM, noSubs = opts.noSubs || sp.nDays < 2;
+    const order = ids => [...ids.filter(id => sp.P[id].pos === 'G'), ...ids.filter(id => sp.P[id].pos !== 'G').sort((a, b) => sp.P[b].pts - sp.P[a].pts)];
+    let L = opts.start ? { xi: opts.start.xi.slice(), bench: order(opts.start.bench), captain: opts.start.captain }
+      : { xi: b0.xi.map(p => p.id), bench: b0.bench.map(p => p.id), captain: b0.captain.id };
+    let ev = evalLineup(sp, L, { noSubs, n });
+    if (!opts.fixed) for (let it = 0; it < (opts.iters ?? 8); it++) {
+      let best = null;
+      const tryL = c => { const v = evalLineup(sp, c, { noSubs, n }); if (v > ev + 0.05 && (!best || v > best.v)) best = { v, c }; };
+      for (const o of L.xi) for (const b of L.bench) if (okSwap(sp.P, L.xi, o, b)) {
+        const xi = L.xi.map(id => (id === o ? b : id));
+        tryL({ xi, bench: order(L.bench.map(id => (id === b ? o : id))), captain: L.captain === o ? b : L.captain });
+      }
+      for (const c of L.xi) if (c !== L.captain) tryL({ ...L, captain: c });
+      if (!best) break;
+      L = best.c; ev = best.v;
+    }
+    const evAuto = evalLineup(sp, L, { noSubs: true, n });
+    const P = sp.P, pl = id => P[id].p;
+    // regras para o intervalo depois do 1.º dia
+    const later = L.bench.filter(id => P[id].day > 0).map(id => ({ p: pl(id), v: P[id].vPlay })).sort((a, b) => b.v - a.v);
+    const capP = pl(L.captain);
+    let capSwitch = null;
+    if (P[L.captain].day === 0) for (const id of L.xi) if (P[id].day > 0 && (!capSwitch || P[id].vPlay > capSwitch.v)) capSwitch = { p: pl(id), v: P[id].vPlay };
+    const xiP = L.xi.map(pl), cnt = k => xiP.filter(p => p.pos === k).length;
+    return { xi: xiP, bench: L.bench.map(pl), captain: capP, formation: `${cnt('D')}-${cnt('M')}-${cnt('F')}`, ev, evAuto, evStatic: xiP.reduce((s, p) => s + p.pts, 0) + capP.pts,
+      days: sp.days, nDays: sp.nDays, dayOf: id => P[id]?.day, later, capSwitch, noSubs };
+  }
+
   // Melhores transferências: ganho no onze ideal, dentro do saldo e do limite por clube
   function transfers(all, squad, bank, maxPerClub = 3) {
     const base = bestXI(squad)?.total || 0;
@@ -211,6 +370,12 @@ const UCLModel = (() => {
       }
     }
     return out.sort((a, b) => b.gain - a.gain);
+  }
+  // As melhores pelo onze esperado, reordenadas pela jornada simulada (com substituições entre dias)
+  function transfersPlan(all, squad, bank, maxPerClub = 3, top = 12) {
+    const n = 400, base = plan(squad, { n, iters: 3 })?.ev || 0;
+    const seen = new Set(), list = transfers(all, squad, bank, maxPerClub).filter(t => { const k = t.out.id + '|' + t.in.id; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, top);
+    return list.map(t => ({ ...t, gainStatic: t.gain, gain: (plan(squad.map(p => (p.id === t.out.id ? t.in : p)), { n, iters: 3 })?.ev || 0) - base })).sort((a, b) => b.gain - a.gain);
   }
 
   // Plantel de raiz (Wildcard/Limitless ou equipa nova): melhora troca a troca o onze ideal (+10% do banco)
@@ -240,6 +405,7 @@ const UCLModel = (() => {
     return { squad: sq, cost: sq.reduce((a, p) => a + p.price, 0), xi: bestXI(sq) };
   }
 
-  return { project, bestXI, transfers, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm };
+  return { project, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
+    setFormW: w => { FORM_W = w; } };
 })();
 if (typeof module !== 'undefined') module.exports = UCLModel;

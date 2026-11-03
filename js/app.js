@@ -634,7 +634,8 @@
   // separadores
   $('#tabs').onclick = e => { const b = e.target.closest('button'); if (!b) return;
     document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
-    document.querySelectorAll('main section').forEach(s => s.classList.toggle('on', s.id === b.dataset.t)); };
+    document.querySelectorAll('main section').forEach(s => s.classList.toggle('on', s.id === b.dataset.t));
+    if (S.mode === 'ucl' && b.dataset.t === 'trocas') UCLApp.renderTrocas(); };
 
   // ---------- atualizações ----------
   // mensagens: as de sucesso desaparecem sozinhas; erros e instruções ficam até à próxima

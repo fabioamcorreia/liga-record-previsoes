@@ -62,8 +62,13 @@ const UCLApp = (() => {
   const hour = ts => new Date(ts).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
 
   // ---------- onze ----------
+  // O onze recomendado vem da jornada simulada com as trocas entre dias (UCLModel.plan): ~1 s, guarda-se em cache
+  const planCache = new Map();
+  const cached = (key, f) => { if (!planCache.has(key)) { if (planCache.size > 40) planCache.clear(); planCache.set(key, f()); } return planCache.get(key); };
+  const sqKey = sq => U.data.meta.created + '|' + JSON.stringify(st().avail) + '|' + sq.map(p => p.id).sort().join(',');
+  const planOf = sq => cached('plan|' + sqKey(sq), () => UCLModel.plan(sq));
   function lineupOf(sq) {
-    const best = UCLModel.bestXI(sq); if (!best) return null;
+    const best = planOf(sq); if (!best) return null;
     const s = st(), stamp = U.data.meta.created;
     const custom = s.lineup && s.lineup.stamp === stamp;
     let L = { formation: best.formation, xi: best.xi.map(p => p.id), bench: best.bench.map(p => p.id), captain: best.captain.id };
@@ -78,9 +83,35 @@ const UCLApp = (() => {
         L = { formation: `${cnt('D')}-${cnt('M')}-${cnt('F')}`, xi, bench, captain: inXI.has(c.captain) ? c.captain : L.captain };
       }
     }
-    return { L, best, custom };
+    // o teu onze avaliado da mesma forma (com as trocas ao intervalo)
+    const mine = custom ? cached('mine|' + sqKey(sq) + JSON.stringify(L), () => UCLModel.plan(sq, { start: L, fixed: true })) : best;
+    return { L, best, custom, mine };
   }
   const total = L => L.xi.reduce((s, id) => s + U.byId[id].pts, 0) + (U.byId[L.captain]?.pts || 0);
+
+  // O que fazer durante a jornada: trocas no intervalo entre dias e mudança de capitão
+  function planHtml(P, L) {
+    const { fmt, esc } = A();
+    if (P.noSubs) return `<div class="card"><h2>Plano da jornada</h2><p class="note">${P.nDays < 2 ? 'Todos os teus jogadores jogam no mesmo dia' : 'Nesta jornada não há trocas a meio'}: o onze no fecho é o que conta (com substituições automáticas para quem não jogar).</p></div>`;
+    const d0 = day(new Date(P.days[0])), d1 = day(new Date(P.days[1]));
+    const first = Object.values(U.proj.games).filter(g => new Date(g.ts).toDateString() === P.days[1]).map(g => g.ts);
+    const t1 = first.length ? Math.min(...first) : null;
+    const cap = U.byId[L.captain], capDay = P.dayOf(L.captain);
+    const benchLater = L.bench.map(id => U.byId[id]).filter(p => P.dayOf(p.id) > 0).map(p => ({ p, v: p.pPlay > 0 ? p.pts / p.pPlay : 0 })).sort((a, b) => b.v - a.v);
+    let cs = null; if (capDay === 0) for (const id of L.xi) { const p = U.byId[id]; const v = p.pPlay > 0 ? p.pts / p.pPlay : 0; if (P.dayOf(id) > 0 && (!cs || v > cs.v)) cs = { p, v }; }
+    const xiDay = k => L.xi.map(id => U.byId[id]).filter(p => P.dayOf(p.id) === k);
+    return `<div class="card"><h2>Plano da jornada <span class="sub">contam os 11 que acabam a jornada no onze</span></h2>
+      <div class="list">
+        <div class="li"><span class="tag ok">1</span><div class="grow"><b>Até ao fecho</b><span>Guarda este onze com o capitão <b>${esc(cap.name)}</b>. Jogam ${d0}: ${xiDay(0).map(p => esc(p.name)).join(', ') || '–'}${xiDay(1).length ? ` · ${d1}: ${xiDay(1).map(p => esc(p.name)).join(', ')}` : ''}.</span></div></div>
+        ${benchLater.length ? `<div class="li"><span class="tag ok">2</span><div class="grow"><b>Depois dos jogos de ${d0}${t1 ? ` (até às ${hour(t1)} de ${d1})` : ''}</b>
+          <span>Espera pelos onzes iniciais de ${d1} (saem 1 h antes) e faz até 4 trocas: um suplente que seja <b>titular</b> entra para o lugar do titular que fez menos pontos, se esse fez menos do que o valor indicado:</span>
+          <span>${benchLater.map(({ p, v }) => `<b>${esc(p.name)}</b> (${POSN[p.pos]}) entra se alguém fez menos de <b>${Math.max(1, Math.round(v))}</b>`).join(' · ')}</span>
+          <span class="muted">GR só troca com GR; o onze tem de ficar com ≥3 DEF, ≥2 MED e ≥1 AV. Quem sai fica com 0. Se um titular teu de ${d1} ficar no banco da equipa dele, tira-o também.</span></div></div>` : ''}
+        ${cs ? `<div class="li"><span class="tag ok">3</span><div class="grow"><b>Capitão</b><span>Se o ${esc(cap.name)} fizer menos de <b>${Math.round(cs.v)}</b> pts, passa a braçadeira ao <b>${esc(cs.p.name)}</b> (${day(cs.p.ts)}, se for titular). Não dá para voltar atrás.</span></div></div>` : ''}
+      </div>
+      <p class="note">Esperado com estas trocas <b>${fmt(P.ev)}</b> pts · sem mexer (só substituições automáticas) ${fmt(P.evAuto)} · ${P.nDays} dias de jogos no teu plantel.
+      Por isso o onze começa com quem joga no 1.º dia e guarda no banco bons jogadores do 2.º: dá para trocar quem correr mal.</p></div>`;
+  }
 
   function renderOnze() {
     const el = $('#onze'), { fmt, pct, esc } = A();
@@ -88,8 +119,8 @@ const UCLApp = (() => {
     const sq = squadP();
     if (sq.length < 15) { el.innerHTML = empty(`O teu plantel da Champions tem ${sq.length} de 15 jogadores.<br>Adiciona-os no separador <b>Plantel</b> (2 GR, 5 DEF, 5 MED, 3 AV).`); return; }
     const r = lineupOf(sq); if (!r) { el.innerHTML = empty('Plantel incompleto para formar um onze válido.'); return; }
-    const { L, best, custom } = r;
-    const tot = total(L), bestTot = best.total, diff = tot - bestTot;
+    const { L, best, custom, mine } = r;
+    const tot = mine.ev, bestTot = best.ev, diff = tot - bestTot;
     saveSnapshot(L, best, tot);
     const inXI = new Set(L.xi), xiP = L.xi.map(id => U.byId[id]);
     const cap = U.byId[L.captain];
@@ -111,35 +142,33 @@ const UCLApp = (() => {
     const bslot = (p, i) => `<div class="bslot" title="Suplente ${i + 1}: ${esc(p.name)}"><span class="n" style="background:var(--${p.pos});color:#fff">${i + 1}</span>
       <div class="t"><b>${esc(p.name)}</b><span>${POSN[p.pos]} · ${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} · ${fmt(p.pts)} pts</span></div>
       ${i > 0 && p.pos !== 'G' && benchP[i - 1].pos !== 'G' ? `<button class="x up" data-i="${i}" title="Subir na prioridade" style="margin-left:auto">↑</button>` : ''}</div>`;
-    const days = [...new Set(xiP.map(p => new Date(p.ts).toDateString()))];
     const alerts = sq.filter(p => p.pPlay < 0.6);
     const capOpts = xiP.slice().sort((a, b) => b.pts - a.pts);
     el.innerHTML = `
       <div class="kpis">
-        <div class="kpi"><div class="l">Pontos esperados</div><div class="v">${fmt(tot)}</div><div class="s">jornada ${U.data.meta.md} · com o capitão ×2</div></div>
-        <div class="kpi"><div class="l">${custom ? 'Diferença para o melhor onze' : 'Tática recomendada'}</div>
-          <div class="v ${custom ? (diff >= -0.05 ? 'good' : 'bad') : ''}">${custom ? (diff >= 0 ? '+' : '') + fmt(diff) : L.formation}</div><div class="s">${custom ? 'melhor onze: ' + fmt(bestTot) : 'a que dá mais pontos esperados'}</div></div>
+        <div class="kpi"><div class="l">Pontos esperados</div><div class="v">${fmt(tot)}</div><div class="s">jornada ${U.data.meta.md} · com as trocas ao intervalo e o capitão ×2</div></div>
+        <div class="kpi"><div class="l">${custom ? 'Diferença para o plano do modelo' : 'Sem mexer durante a jornada'}</div>
+          <div class="v ${custom ? (diff >= -0.05 ? 'good' : 'bad') : ''}">${custom ? (diff >= 0 ? '+' : '') + fmt(diff) : fmt(mine.evAuto)}</div><div class="s">${custom ? 'plano do modelo: ' + fmt(bestTot) : 'só com substituições automáticas'}</div></div>
         <div class="kpi"><div class="l">Capitão</div><div class="v" style="font-size:19px">${esc(cap?.name || '–')}</div><div class="s">${cap ? esc(cap.team + ' ' + cap.opp) + ' · ' + day(cap.ts) + ' · ' + fmt(2 * cap.pts) + ' pts' : ''}</div></div>
         <div class="kpi"><div class="l">Plantel</div><div class="v">${m1(sq.reduce((s, p) => s + p.price, 0))}</div><div class="s">saldo ${m1(st().bank)} · ${st().freeT} transferência${st().freeT === 1 ? '' : 's'} grátis</div></div>
       </div>
       <div class="grid2">
         <div class="card">
           <div class="pitch-head">
-            <span class="chip">${esc(L.formation)}</span>
-            <div class="row">${custom ? '<button class="btn primary" id="uResetXI">↺ Repor melhor onze</button>' : '<span class="note">Clica num jogador para o trocar</span>'}
+            <span class="chip" title="Não há tática fixa: muda com as substituições (1 GR, ≥3 DEF, ≥2 MED, ≥1 AV)">começa em ${esc(L.formation)}</span>
+            <div class="row">${custom ? '<button class="btn primary" id="uResetXI">↺ Repor plano do modelo</button>' : '<span class="note">Clica num jogador para o trocar</span>'}
               <button class="btn" id="uCmpBtn" aria-pressed="${U.compare}">${U.compare ? '✕ Fechar comparação' : '⚖ Comparar com o melhor da Champions'}</button></div>
           </div>
           <div class="field"><div class="mid"></div><div class="circle"></div>
             <div class="lineup">${lanes.map(l => `<div class="lane">${l.map(token).join('')}</div>`).join('')}</div></div>
-          <h2 style="margin:16px 0 0">Suplentes <span class="sub">GR primeiro; os outros por prioridade (entram automaticamente se um titular não jogar, sem estragar a tática)</span></h2>
+          <h2 style="margin:16px 0 0">Suplentes <span class="sub">os do 2.º dia são para trocar no intervalo; a ordem só conta nas substituições automáticas (se não fizeres trocas)</span></h2>
           <div class="bench">${benchP.map(bslot).join('')}</div>
-          ${days.length > 1 ? `<div class="warnbox" style="background:var(--soft);border-color:var(--line)">📅 O teu onze joga em ${days.length} dias (${days.map(d => day(new Date(d))).join(', ')}). Depois do 1.º dia podes fazer até 4 substituições e trocar de capitão para quem ainda não jogou.</div>` : ''}
         </div>
         <div>
+          ${planHtml(mine, L)}
           <div class="card"><h2>Capitão</h2>
             <div class="list"><label class="coach"><span class="ic">C</span><div><b>${esc(cap?.name || '')}</b><div class="note">Conta a dobrar · clica para mudar</div></div>
               <select id="uCapSel">${capOpts.map(p => `<option value="${p.id}" ${p.id === L.captain ? 'selected' : ''}>${optLabel(p)}</option>`).join('')}</select></label></div>
-            ${best.capDay1 ? `<p class="note" style="margin-top:8px">💡 Alternativa: <b>${esc(best.capDay1.name)}</b> (${fmt(best.capDay1.pts)} pts, joga ${day(best.capDay1.ts)}). Perde pouco e, se correr mal, podes passar a braçadeira a quem joga depois.</p>` : ''}
             <h2 style="margin:16px 0 8px">Melhores capitães <span class="sub">do teu onze</span></h2>
             <div class="list">${capOpts.slice(0, 4).map(p => `<div class="li">${A().posTag(p.pos)}<div class="grow"><b>${esc(p.name)}</b><span>${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} ${hour(p.ts)} · P(golo) ${pct(p.Pg)}</span></div><span class="pts ${p.id === L.captain ? 'hi' : ''}">${fmt(2 * p.pts)}</span></div>`).join('')}</div>
           </div>
@@ -170,7 +199,7 @@ const UCLApp = (() => {
     const pl = id => { const p = U.byId[id]; return { id, n: p.name, t: p.team, pos: p.pos, pts: +p.pts.toFixed(2) }; };
     const h = A().ls.get('ucl.history', {}), old = h[md];
     const snap = { md, close, xi: L.xi.map(pl), bench: L.bench.map(pl), captain: L.captain, exp: +tot.toFixed(2),
-      alt: { formation: best.formation, xi: best.xi.map(p => p.id), captain: best.captain.id, exp: +best.total.toFixed(2) } };
+      alt: { formation: best.formation, xi: best.xi.map(p => p.id), captain: best.captain.id, exp: +best.ev.toFixed(2) } };
     if (old && JSON.stringify({ ...old, official: undefined }) === JSON.stringify(snap)) return;
     h[md] = { ...snap, official: old?.official ?? null }; put('history', h);
   }
@@ -215,19 +244,19 @@ const UCLApp = (() => {
         ${h.xi.slice().sort((x, y) => 'GDMF'.indexOf(x.pos) - 'GDMF'.indexOf(y.pos)).map(p => `<tr><td>${posTag(p.pos)}</td><td>${esc(p.n)}${p.id === h.captain ? ' <span class="tag ok">C ×2</span>' : ''} <span class="muted">${esc(p.t)}</span></td>
           <td class="num">${fmt(p.pts * (p.id === h.captain ? 2 : 1))}</td><td class="num">${p.real == null ? '–' : p.real * (p.id === h.captain ? 2 : 1)}</td></tr>`).join('')}</table>
         <p class="note">Banco: ${h.bench.map(p => `${esc(p.n)} (${p.real ?? '–'})`).join(' · ')}${subs.length ? `<br>Substituições durante a jornada: ${subs.join(' · ')}` : ''}</p>
-        ${a ? `<p class="note"><b>Onze do modelo</b> (${esc(a.formation)}, capitão ${esc(nameOf(a.captain))}): esperado ${fmt(a.exp)}${a.real != null ? `, real <b>${a.real}</b>` : ''}${a.autoSubs?.length ? ` (substituições automáticas: ${a.autoSubs.map(esc).join(', ')})` : ''}.
+        ${a ? `<p class="note"><b>Plano do modelo</b> (começa em ${esc(a.formation)}, capitão ${esc(nameOf(a.captain))}): esperado ${fmt(a.exp)}${a.real != null ? `, real <b>${a.real}</b>` : ''}${a.autoSubs?.length ? ` (substituições automáticas: ${a.autoSubs.map(esc).join(', ')})` : ''}.
           ${out.length ? `Mudava: sai ${out.join(', ')} · entra ${inn.join(', ')}.` : 'Os mesmos 11.'}</p>` : ''}`;
     };
     el.innerHTML = `
       <div class="kpis">
         <div class="kpi"><div class="l">Os teus pontos</div><div class="v">${done.length ? sum(done, r => r.real) : '–'}</div><div class="s">${done.length} jornada${done.length === 1 ? '' : 's'}${done.length ? ' · ' + fmt(sum(done, r => r.real) / done.length) + ' por jornada' : ''}</div></div>
-        <div class="kpi"><div class="l">Esperado (onze no fecho)</div><div class="v">${done.length ? fmt(sum(done, r => r.h.exp)) : '–'}</div><div class="s">${done.length ? 'real − esperado: ' + sg(sum(done, r => r.real) - sum(done, r => r.h.exp)) : ''}</div></div>
-        <div class="kpi"><div class="l">Onze do modelo (real)</div><div class="v">${withAlt.length ? sum(withAlt, r => r.altReal) : '–'}</div><div class="s">${withAlt.length ? `vs. os teus ${sum(withAlt, r => r.real)}: ${sg(sum(withAlt, r => r.altReal) - sum(withAlt, r => r.real))}` : ''}</div></div>
+        <div class="kpi"><div class="l">Esperado (o teu onze)</div><div class="v">${done.length ? fmt(sum(done, r => r.h.exp)) : '–'}</div><div class="s">${done.length ? 'real − esperado: ' + sg(sum(done, r => r.real) - sum(done, r => r.h.exp)) : ''}</div></div>
+        <div class="kpi"><div class="l">Plano do modelo (real)</div><div class="v">${withAlt.length ? sum(withAlt, r => r.altReal) : '–'}</div><div class="s">${withAlt.length ? `vs. os teus ${sum(withAlt, r => r.real)}: ${sg(sum(withAlt, r => r.altReal) - sum(withAlt, r => r.real))}` : ''}</div></div>
         <div class="kpi"><div class="l">Esperado do modelo</div><div class="v">${withAlt.length ? fmt(sum(withAlt, r => r.h.alt.exp)) : '–'}</div><div class="s">no papel, o onze do modelo</div></div>
       </div>
       <div class="card"><h2>Histórico da Champions</h2>
-        <p class="note">O onze fica guardado sozinho até ao fecho, com o onze que o modelo escolheria. "Real" = pontos da UEFA: as tuas substituições entre dias contam no real; o esperado é o do onze no fecho. Em <b>Oficial</b> escreve o total da jornada.
-        ${H.some(h => h.sim) ? '<br><sup>*</sup> simulado: modelo atual com os dados e as odds da véspera; o onze do modelo usa os mesmos 15 jogadores, só com substituições automáticas.' : ''}</p>
+        <p class="note">O onze fica guardado sozinho até ao fecho, com o onze que o modelo escolheria. "Real" = pontos da UEFA: o esperado é o do onze no fecho jogado com as trocas ao intervalo (as regras do plano). Em <b>Oficial</b> escreve o total da jornada.
+        ${H.some(h => h.sim) ? '<br><sup>*</sup> simulado: modelo atual com os dados e as odds da véspera; o plano do modelo usa os mesmos 15 jogadores (onze inicial, trocas ao intervalo pelas regras do plano e capitão).' : ''}</p>
         <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th><th class="num">Oficial</th></tr>
         ${rows.map(({ h, real, altReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}${h.expFinal != null ? `<br><span class="muted" title="esperado do onze no fim da jornada, depois das tuas substituições">final ${fmt(h.expFinal)}</span>` : ''}</td>
           <td class="num">${real != null ? `<span class="pts hi">${real}</span>` : `<span class="tag q">${Date.now() < h.close ? 'por jogar' : 'atualiza a UEFA'}</span>`}</td>
@@ -257,10 +286,11 @@ const UCLApp = (() => {
   function table(list, { add = false } = {}) {
     const { fmt, pct, esc, posTag } = A();
     const mine = new Set(st().squad);
-    return `<div style="overflow-x:auto"><table><tr><th>Pos</th><th>Jogador</th><th>Jogo</th><th class="num">Pts esp.</th><th class="num">Joga</th><th class="num">P(golo)</th><th class="num">Baliza 0</th><th class="num">Méd. real</th><th class="num">Preço</th>${add ? '<th></th>' : ''}</tr>
+    return `<div style="overflow-x:auto"><table><tr><th>Pos</th><th>Jogador</th><th>Jogo</th><th class="num">Pts esp.</th><th class="num" title="probabilidade de jogar">Joga</th><th class="num">P(golo)</th><th class="num">P(assist.)</th><th class="num" title="probabilidade de ter os pontos de baliza a zero (60'+ sem sofrer)">P(baliza 0)</th><th class="num" title="pontos por jogo nos últimos 3 jogos em que jogou">Forma</th><th class="num">Méd. real</th><th class="num">Preço</th>${add ? '<th></th>' : ''}</tr>
       ${list.map(p => `<tr><td>${posTag(p.pos)}</td><td><b>${esc(p.name)}</b>${p.status ? ` <span class="${p.pPlay < 0.2 ? 'bad' : 'warn'}">${esc(p.status)}</span>` : ''}</td>
         <td>${esc(p.team)} <span class="muted">${esc(p.opp)} · ${day(p.ts)}</span></td><td class="num"><span class="pts ${p.pts >= 5 ? 'hi' : ''}">${fmt(p.pts)}</span></td>
-        <td class="num">${pct(p.pPlay)}</td><td class="num">${pct(p.Pg)}</td><td class="num">${p.pos === 'F' ? '–' : pct(p.cs)}</td>
+        <td class="num">${pct(p.pPlay)}</td><td class="num">${pct(p.Pg)}</td><td class="num">${pct(p.Pa)}</td><td class="num">${p.pos === 'F' ? '–' : pct(p.pCS)}</td>
+        <td class="num">${p.form == null ? '–' : fmt(p.form)}</td>
         <td class="num">${p.avgPts == null ? '–' : fmt(p.avgPts)}<span class="muted"> (${p.games})</span></td><td class="num">${m1(p.price)}</td>
         ${add ? `<td>${mine.has(p.id) ? '<span class="good">✓</span>' : `<button class="btn uAdd" data-id="${p.id}">+</button>`}</td>` : ''}</tr>`).join('')}</table></div>`;
   }
@@ -271,20 +301,26 @@ const UCLApp = (() => {
     if (!U.data) { el.innerHTML = noData(); return; }
     const sq = squadP(), s = st();
     if (sq.length < 15) { el.innerHTML = empty('Completa primeiro o plantel (15 jogadores) no separador <b>Plantel</b>.'); return; }
-    const list = UCLModel.transfers(U.proj.players, sq, +s.bank || 0);
-    // melhor par de transferências (a 2.ª calculada depois da 1.ª)
-    const one = list[0];
-    let pair = null;
-    if (one) {
-      const sq2 = sq.map(p => (p.id === one.out.id ? one.in : p));
-      const two = UCLModel.transfers(U.proj.players, sq2, (+s.bank || 0) - one.cost)[0];
-      if (two) pair = { a: one, b: two, gain: one.gain + two.gain };
+    // ganho medido na jornada simulada (com as trocas ao intervalo); leva alguns segundos → calcula depois de mostrar
+    const key = 'tr|' + sqKey(sq) + '|' + s.bank;
+    if (!planCache.has(key)) {
+      el.innerHTML = '<div class="card empty"><span class="ic">⏳</span>A simular as transferências (com as trocas entre dias)…</div>';
+      if (!el.classList.contains('on')) return; // só quando o separador está aberto
+      setTimeout(() => { cached(key, () => {
+        const list = UCLModel.transfersPlan(U.proj.players, sq, +s.bank || 0);
+        // melhor par de transferências (a 2.ª calculada depois da 1.ª)
+        const one = list[0]; let pair = null;
+        if (one) { const two = UCLModel.transfersPlan(U.proj.players, sq.map(p => (p.id === one.out.id ? one.in : p)), (+s.bank || 0) - one.cost)[0]; if (two) pair = { a: one, b: two, gain: one.gain + two.gain }; }
+        return { list, pair };
+      }); renderTrocas(); }, 50);
+      return;
     }
+    const { list, pair } = planCache.get(key);
     const seen = new Set(), top = list.filter(t => { if (seen.has(t.out.id)) return false; seen.add(t.out.id); return t.gain > 0.05; }).slice(0, 8);
     const card = t => `<div class="swap"><div class="li">${posTag(t.out.pos)}<div class="grow"><span class="muted">Sai</span><b>${esc(t.out.name)}</b><span>${esc(t.out.team)} ${esc(t.out.opp)} · ${fmt(t.out.pts)} pts · ${m1(t.out.price)}</span></div></div>
       <div class="li">${posTag(t.in.pos)}<div class="grow"><span class="muted">Entra</span><b>${esc(t.in.name)}</b><span>${esc(t.in.team)} ${esc(t.in.opp)} · ${fmt(t.in.pts)} pts · ${m1(t.in.price)}</span></div><span class="pts hi">+${fmt(t.gain)}</span></div></div>`;
     el.innerHTML = `
-      <div class="card"><div class="row" style="justify-content:space-between"><h2>Transferências <span class="sub">ganho = pontos esperados a mais no teu melhor onze desta jornada</span></h2>
+      <div class="card"><div class="row" style="justify-content:space-between"><h2>Transferências <span class="sub">ganho = pontos esperados a mais nesta jornada, já com as trocas ao intervalo</span></h2>
         <div class="row"><label>Saldo <input type="number" step="0.1" class="small" id="uBank" value="${s.bank}"> M€</label>
         <label>Grátis <input type="number" step="1" min="0" max="5" class="small" id="uFree" value="${s.freeT}"></label></div></div>
         <p class="note">Fase de liga: 2 transferências grátis por jornada (só 1 passa para a seguinte); cada transferência a mais custa −4 pts. Máximo 3 jogadores por clube. Preço de venda = preço atual.</p>
@@ -309,22 +345,38 @@ const UCLApp = (() => {
           <div class="prob"><i style="width:${g.pHome * 100}%;background:var(--good)"></i><i style="width:${g.pDraw * 100}%;background:var(--muted)"></i><i style="width:${g.pAway * 100}%;background:var(--bad)"></i></div>
           <div class="note">${pct(g.pHome)} · ${pct(g.pDraw)} · ${pct(g.pAway)} · golos esperados ${fmt(g.lh)}–${fmt(g.la)} · baliza a zero ${pct(Math.exp(-g.la))} / ${pct(Math.exp(-g.lh))} <span class="tag q">${g.src}</span></div>
           ${mineHere.length ? `<div class="note">Os teus: ${mineHere.map(p => esc(p.name)).join(', ')}</div>` : ''}</div>`; }).join('')}</div>
-      ${gs.some(g => g.src !== 'odds') ? '<p class="note">"preços" = sem odds do Sofascore para esse jogo: a força das equipas vem dos preços dos jogadores na Fantasy. Atualiza o Sofascore para usar as odds.</p>' : ''}</div>`;
+      ${gs.some(g => g.src !== 'odds') ? '<p class="note">"preços" = sem odds do Sofascore para esse jogo: a força das equipas vem dos preços dos jogadores na Fantasy. Atualiza o Sofascore para usar as odds.</p>' : ''}</div>
+      ${teamsHtml(mine)}`;
+  }
+  // Equipas por probabilidade de baliza a zero (defesas e GR) e por golos esperados (ataque)
+  function teamsHtml(mine) {
+    const { fmt, pct, esc } = A();
+    const T = Object.values(U.proj.games).map(g => ({ g, cs: Math.exp(-g.la_), gf: g.isHome ? g.lh : g.la, ga: g.la_, n: mine.filter(p => p.teamId === g.me.id).length }));
+    const tbl = (list, hi) => `<table><tr><th>Equipa</th><th>Jogo</th><th class="num">P(baliza 0)</th><th class="num">Golos marcados</th><th class="num">Golos sofridos</th><th class="num">Vitória</th></tr>
+      ${list.map(t => `<tr><td><b>${esc(t.g.me.name)}</b>${t.n ? ` <span class="tag ok">${t.n} teu${t.n > 1 ? 's' : ''}</span>` : ''}</td><td><span class="muted">${t.g.isHome ? 'vs' : '@'} ${esc(t.g.opp.name)} · ${day(t.g.ts)} ${hour(t.g.ts)}</span></td>
+        <td class="num">${hi === 'cs' ? `<b>${pct(t.cs)}</b>` : pct(t.cs)}</td><td class="num">${hi === 'gf' ? `<b>${fmt(t.gf)}</b>` : fmt(t.gf)}</td><td class="num">${fmt(t.ga)}</td><td class="num">${pct(t.g.pw)}</td></tr>`).join('')}</table>`;
+    return `<div class="grid2"><div class="card"><h2>Defesas: baliza a zero <span class="sub">GR e DEF ganham +4 (60'+), −1 por cada 2 sofridos</span></h2>
+        <div style="overflow-x:auto">${tbl(T.slice().sort((a, b) => b.cs - a.cs).slice(0, 12), 'cs')}</div></div>
+      <div class="card"><h2>Ataque: golos esperados <span class="sub">golo: AV +4, MED +5, DEF +6; assistência +3</span></h2>
+        <div style="overflow-x:auto">${tbl(T.slice().sort((a, b) => b.gf - a.gf).slice(0, 12), 'gf')}</div></div></div>`;
   }
 
   // ---------- ranking ----------
   function renderRanking() {
     const el = $('#ranking'); if (!U.data) { el.innerHTML = noData(); return; }
-    const r = U.rank ||= { pos: 'all', q: '', max: '' };
+    const r = U.rank ||= { pos: 'all', q: '', max: '', by: 'pts' };
+    const SORT = { pts: ['Pts esp.', p => p.pts], pPlay: ['Joga', p => p.pPlay], Pg: ['P(golo)', p => p.Pg], pCS: ['P(baliza 0)', p => p.pCS], form: ['Forma', p => p.form ?? -9] };
     const { norm } = UCLModel;
     const list = U.proj.players.filter(p => (r.pos === 'all' || p.pos === r.pos) && (!r.q || norm(p.name + ' ' + p.team).includes(norm(r.q))) && (!r.max || p.price <= +r.max))
-      .sort((a, b) => b.pts - a.pts).slice(0, 150);
+      .sort((a, b) => SORT[r.by || 'pts'][1](b) - SORT[r.by || 'pts'][1](a) || b.pts - a.pts).slice(0, 150);
     el.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2>Ranking da Champions <span class="sub">pontos esperados na jornada ${U.data.meta.md}</span></h2>
       <div class="row"><div class="seg">${['all', 'G', 'D', 'M', 'F'].map(k => `<button data-p="${k}" class="${r.pos === k ? 'on' : ''}">${k === 'all' ? 'Todos' : POSN[k]}</button>`).join('')}</div>
+      <label>Ordenar <select id="uBy">${Object.entries(SORT).map(([k, [l]]) => `<option value="${k}" ${r.by === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <input id="uQ" placeholder="Procurar jogador/equipa" value="${A().esc(r.q)}"><label>Até <input id="uMax" type="number" step="0.5" class="small" value="${r.max}"> M€</label></div></div>
       ${table(list, { add: true })}</div>`;
     el.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { r.pos = b.dataset.p; renderRanking(); });
     $('#uQ').onchange = e => { r.q = e.target.value; renderRanking(); };
+    $('#uBy').onchange = e => { r.by = e.target.value; renderRanking(); };
     $('#uMax').onchange = e => { r.max = e.target.value; renderRanking(); };
     el.querySelectorAll('.uAdd').forEach(b => b.onclick = () => addPlayer(+b.dataset.id));
   }
@@ -394,5 +446,5 @@ const UCLApp = (() => {
     if (Array.isArray(b.squad) && b.squad.length) for (const k of ['squad', 'bank', 'avail', 'lineup', 'freeT', 'name', 'history']) if (b[k] !== undefined) put(k, b[k]);
   }
 
-  return { init, setData, recompute, renderAll, header, tick, bundle, applyBundle, SITE };
+  return { init, setData, recompute, renderAll, renderTrocas, header, tick, bundle, applyBundle, SITE };
 })();
