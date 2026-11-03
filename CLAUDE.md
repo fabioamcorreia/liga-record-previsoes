@@ -55,7 +55,9 @@ js/app.js                      interface (separadores: onze, transferências, jo
                                Histórico: guarda o onze de cada jornada até ao fecho (localStorage lr.history, vai no sync.json)
                                e calcula os pontos reais com o PDF (3 suplentes automáticos, capitão ×2, treinador)
                                — confirmado: bate certo com os pontos oficiais das rondas 1-4 (54, 27, 55, 65).
-js/history-seed.js             onzes das jornadas 6-10 (screenshots); J10 com esperado calculado com os dados de 30-out
+js/history-seed.js             onzes das jornadas 6-10 (screenshots) + simulação: J6-J9 com o modelo sobre dados reconstruídos
+                               da véspera (rounds do Sofascore + odds/xG/ausências por jogo; validado: J10 reconstruída = ±0,1/jogador)
+                               e `alt` = onze do modelo com os mesmos 15. J6-J10: teu onze 270 pts reais (esperado 261) · modelo 258.
 collector/sofascore-collector.js  função ligaRecordCollector(); a app gera com ela o marcador "Liga Record ⚽" (bookmarklet).
                                No sofascore.com: envia os dados à app por postMessage (botão "Atualizar Sofascore") ou descarrega .json
 js/pdf-import.js               lê os PDFs no browser (pdf.js 3.11.174 da cdnjs, worker na própria página); igual ao parser Python
