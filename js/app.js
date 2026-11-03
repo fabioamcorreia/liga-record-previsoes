@@ -45,7 +45,7 @@
     // onze personalizado: null = usar o melhor onze calculado
     lineup: ls.get('lineup', null), allCols: ls.get('allCols', false),
     // histórico: fotografia do onze de cada jornada (pontos esperados), por jornada da Liga
-    history: ls.get('history', {})
+    history: { ...(window.LR_HISTORY_SEED || {}), ...ls.get('history', {}) }
   };
   const save = () => { ls.set('squad', S.squad); ls.set('prices', S.prices); ls.set('saldo', S.saldo); ls.set('posOverride', S.posOverride); ls.set('availOverride', S.availOverride); ls.set('lineup', S.lineup); ls.set('history', S.history); };
 
@@ -562,7 +562,9 @@
     if (!list.length) { el.innerHTML = `<div class="card empty"><span class="ic">📅</span>Ainda sem jornadas guardadas.<br>A app guarda sozinha o onze de <b>O meu onze</b> antes do fecho de cada jornada; quando chegar o PDF das pontuações, aparecem aqui os pontos reais.</div>`; return; }
     const R = list.map(h => ({ h, re: S.data ? realPoints(h) : null }));
     const done = R.filter(x => x.re), off = R.filter(x => x.h.official != null);
-    const expT = done.reduce((s, x) => s + x.h.exp, 0), realT = done.reduce((s, x) => s + x.re.total, 0);
+    // real − esperado só nas jornadas com previsão (as anteriores à app não têm)
+    const both = done.filter(x => x.h.exp != null);
+    const expT = both.reduce((s, x) => s + x.h.exp, 0), realB = both.reduce((s, x) => s + x.re.total, 0), realT = done.reduce((s, x) => s + x.re.total, 0);
     const POSN = { G: 'GR', D: 'DEF', M: 'MED', F: 'AV' };
     const sg = d => (d > 0 ? '+' : '') + fmt(d);
     const rnd = j => (j > LRModel.ROUND_OFFSET ? `ronda ${j - LRModel.ROUND_OFFSET}` : 'experimental');
@@ -572,7 +574,7 @@
       const note = r => (!re || r.played ? '' : r.sub ? `não jogou → entrou ${esc(r.sub.n)} (${r.sub.real})` : 'não jogou, sem suplente');
       return `<table><tr><th>Pos.</th><th>Jogador</th><th class="num">Esperado</th><th class="num">Real</th><th></th></tr>
         ${rows.map(r => `<tr><td>${posTag(r.pos)}</td><td>${esc(r.n)}${r.cap ? ' <span class="tag ok">C ×2</span>' : ''} <span class="muted">${esc(r.t)}</span></td>
-          <td class="num">${fmt(r.pts * (r.cap ? 2 : 1))}</td><td class="num">${re ? `<b>${r.counted}</b>` : '–'}</td><td class="muted">${note(r)}</td></tr>`).join('')}
+          <td class="num">${r.pts == null ? '–' : fmt(r.pts * (r.cap ? 2 : 1))}</td><td class="num">${re ? `<b>${r.counted}</b>` : '–'}</td><td class="muted">${note(r)}</td></tr>`).join('')}
         ${h.coach ? `<tr><td><span class="tag q">TR</span></td><td>Treinador ${esc(re?.coachName || '')} <span class="muted">${esc(h.coach.t)}</span></td>
           <td class="num">${fmt(h.coach.pts)}</td><td class="num">${re ? `<b>${re.coach ?? '–'}</b>` : '–'}</td><td></td></tr>` : ''}
         </table><p class="note">Banco (por ordem): ${h.bench.map(b => `${esc(b.n)} (${POSN[b.pos]})`).join(' · ')}</p>`;
@@ -580,20 +582,20 @@
     el.innerHTML = `
       <div class="kpis">
         <div class="kpi"><div class="l">Jornadas com resultado</div><div class="v">${done.length}</div><div class="s">${list.length} guardada${list.length > 1 ? 's' : ''}</div></div>
-        <div class="kpi"><div class="l">Pontos esperados</div><div class="v">${done.length ? fmt(expT) : '–'}</div><div class="s">${done.length ? fmt(expT / done.length) + ' por jornada' : 'à espera do PDF'}</div></div>
         <div class="kpi"><div class="l">Pontos reais (calculados)</div><div class="v">${done.length ? realT : '–'}</div><div class="s">${done.length ? fmt(realT / done.length) + ' por jornada' : ''}</div></div>
-        <div class="kpi"><div class="l">Real − esperado</div><div class="v">${done.length ? sg(realT - expT) : '–'}</div><div class="s">${off.length ? `oficial: ${off.reduce((s, x) => s + x.h.official, 0)} pts em ${off.length} jornada${off.length > 1 ? 's' : ''}` : 'escreve os pontos oficiais para confirmar'}</div></div>
+        <div class="kpi"><div class="l">Pontos esperados</div><div class="v">${both.length ? fmt(expT) : '–'}</div><div class="s">${both.length ? `em ${both.length} jornada${both.length > 1 ? 's' : ''} com previsão` : 'à espera do PDF'}</div></div>
+        <div class="kpi"><div class="l">Real − esperado</div><div class="v">${both.length ? sg(realB - expT) : '–'}</div><div class="s">${off.length ? `oficial: ${off.reduce((s, x) => s + x.h.official, 0)} pts em ${off.length} jornada${off.length > 1 ? 's' : ''}` : 'escreve os pontos oficiais para confirmar'}</div></div>
       </div>
       <div class="card"><h2>Histórico de jornadas</h2>
         <p class="note">O onze de <b>O meu onze</b> fica guardado sozinho até ao fecho de cada jornada. O real é calculado com o PDF das pontuações (suplentes automáticos, capitão ×2, treinador); em <b>Oficial</b> escreve os pontos que a Liga Record te deu.</p>
         <table><tr><th>Jornada</th><th>Tática</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Diferença</th><th class="num">Oficial</th></tr>
-        ${R.map(({ h, re }) => { const d = re ? re.total - h.exp : null; return `<tr>
+        ${R.map(({ h, re }) => { const d = re && h.exp != null ? re.total - h.exp : null; return `<tr>
           <td><b>J${h.j}</b> <span class="muted">${rnd(h.j)}</span></td><td>${esc(h.formation)}</td><td class="num">${fmt(h.exp)}</td>
           <td class="num">${re ? `<span class="pts hi">${re.total}</span>` : `<span class="tag q">${status(h)}</span>`}</td>
           <td class="num">${d == null ? '–' : `<span class="tag ${d >= 0 ? 'ok' : 'no'}">${sg(d)}</span>`}</td>
           <td class="num"><input class="hOff" data-j="${h.j}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`; }).join('')}
         </table></div>
-      ${R.map(x => `<details class="card"><summary><b>J${x.h.j}</b> · ${esc(x.h.formation)} · esperado ${fmt(x.h.exp)}${x.re ? ` · real ${x.re.total}${x.re.subs ? ` (${x.re.subs} suplente${x.re.subs > 1 ? 's' : ''} entrou${x.re.subs > 1 ? 'aram' : ''})` : ''}` : ''}</summary>${detail(x)}</details>`).join('')}`;
+      ${R.map(x => `<details class="card"><summary><b>J${x.h.j}</b> · ${esc(x.h.formation)} · ${x.h.exp != null ? "esperado " + fmt(x.h.exp) : "antes da app (sem previsão)"}${x.re ? ` · real ${x.re.total}${x.re.subs ? ` (${x.re.subs > 1 ? x.re.subs + ' suplentes entraram' : '1 suplente entrou'})` : ''}${x.h.official != null && x.re.total !== x.h.official ? ` · oficial ${x.h.official}` : ''}` : ''}</summary>${detail(x)}</details>`).join('')}`;
     el.querySelectorAll('.hOff').forEach(i => i.onchange = () => { S.history[+i.dataset.j].official = i.value === '' ? null : Math.round(+i.value); save(); renderHistorico(); });
   }
 
