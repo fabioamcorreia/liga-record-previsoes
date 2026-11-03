@@ -77,6 +77,9 @@
   .seg { display: inline-flex; background: var(--soft); border-radius: 10px; padding: 3px; gap: 2px; flex-wrap: wrap; }
   .seg button { border: 0; background: none; padding: 5px 10px; border-radius: 8px; cursor: pointer; color: var(--muted); font-weight: 600; font-size: 12.5px; }
   .seg button.on { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
+  .seg.mode { margin-left: 12px; background: rgba(255,255,255,.1); } .seg.mode button { color: #c9d0dc; } .seg.mode button.on { background: #fff; color: #10141c; }
+  body.mode-ucl .lr-only { display: none !important; } body:not(.mode-ucl) .ucl-only { display: none !important; }
+  body.mode-ucl .brand .logo { background: #1d3fbf; }
   .field { position: relative; border-radius: 14px; padding: 18px 10px 14px; overflow: hidden;
     background: repeating-linear-gradient(180deg, var(--pitch1) 0 56px, var(--pitch2) 56px 112px); }
   .field::before { content: ""; position: absolute; inset: 10px; border: 2px solid var(--pitch-line); border-radius: 6px; pointer-events: none; }
@@ -179,11 +182,14 @@
 <body>
 <header class="top">
   <div class="top-in">
-    <div class="brand"><span class="logo">⚽</span><div>Liga Record – Previsões<small id="teamName">MAN. CITY DA TEMU</small></div></div>
+    <div class="brand"><span class="logo">⚽</span><div>Previsões<small id="teamName">MAN. CITY DA TEMU</small></div>
+      <div class="seg mode" id="modeSel" role="group" aria-label="Jogo"><button data-m="lr" class="on">Liga Record</button><button data-m="ucl">Champions</button></div></div>
     <span class="deadline far" id="deadline" hidden></span>
     <div class="src" title="Dados dos jogos, jogadores, odds e lesões"><span class="dot none" id="dotSofa"></span><div><b>Sofascore</b> <span class="sub" id="subSofa">sem dados</span></div>
       <button id="btnSofa" title="Abre o Sofascore; depois clica no marcador 'Liga Record ⚽'">Atualizar</button></div>
-    <div class="src" title="Pontuações oficiais (PDFs da pasta pdfs/)"><span class="dot none" id="dotLR"></span><div><b>Pontuações</b> <span class="sub" id="subLR">sem PDFs</span></div>
+    <div class="src ucl-only" title="Jogadores, preços e pontos da UEFA Champions League Fantasy"><span class="dot none" id="dotUefa"></span><div><b>UEFA Fantasy</b> <span class="sub" id="subUefa">sem dados</span></div>
+      <button id="btnUefa" title="Abre a UEFA Fantasy; depois clica no marcador 'Liga Record ⚽'">Atualizar</button></div>
+    <div class="src lr-only" title="Pontuações oficiais (PDFs da pasta pdfs/)"><span class="dot none" id="dotLR"></span><div><b>Pontuações</b> <span class="sub" id="subLR">sem PDFs</span></div>
       <button id="btnPdfs" title="Lê todos os PDFs 'Liga Record - Pontuações' da pasta pdfs/">Atualizar</button></div>
     <div class="src" id="srcSync" title="Envia os dados deste PC para o telemóvel (ficheiro data/sync.json + publicar.bat)"><span class="dot none" id="dotSync"></span><div><b>Telemóvel</b> <span class="sub" id="subSync">não publicado</span></div>
       <button id="btnSync">Publicar</button></div>
@@ -191,6 +197,7 @@
       <label>Sofascore (.json)<input type="file" id="fSofa" accept=".json"></label>
       <label>Pontuações (.json)<input type="file" id="fLR" accept=".json"></label>
       <label>PDFs<input type="file" id="fPdfs" accept=".pdf" multiple></label>
+      <label>UEFA Fantasy (.json)<input type="file" id="fUefa" accept=".json"></label>
     </details>
     <span id="status"></span>
   </div>
@@ -198,10 +205,10 @@
     <button data-t="onze" class="on">O meu onze</button>
     <button data-t="trocas">Transferências</button>
     <button data-t="jogos">Jogos</button>
-    <button data-t="historico">Histórico</button>
+    <button data-t="historico" class="lr-only">Histórico</button>
     <button data-t="ranking">Ranking</button>
     <button data-t="plantel">Plantel</button>
-    <button data-t="calib">Calibração</button>
+    <button data-t="calib" class="lr-only">Calibração</button>
     <button data-t="ajuda">Como usar</button>
   </nav>
 </header>
@@ -230,7 +237,16 @@
       </ol>
       <p class="note">Os dados ficam guardados neste browser. O plantel pode ser exportado/importado em JSON. Alternativa ao marcador: F12 → Consola no sofascore.com → colar <code>collector/sofascore-collector.js</code> → Enter.</p>
     </div>
-    <div class="card">
+    <div class="card ucl-only">
+      <h2>Champions (UEFA Fantasy)</h2>
+      <ol>
+        <li><b>UEFA Fantasy → Atualizar</b>: abre a UEFA Champions League Fantasy; lá clica no marcador <b>Liga Record ⚽</b> (1-2 minutos, caixa azul → verde). Traz jogadores, preços, estados (lesionado, castigado, dúvida) e as estatísticas e pontos de cada jogo.</li>
+        <li><b>Sofascore → Atualizar</b> (o mesmo de sempre): passa também a trazer as odds dos jogos da próxima jornada da Champions.</li>
+        <li>No <b>Plantel</b> mete os teus 15 jogadores e o saldo; vê o <b>O meu onze</b> e as <b>Transferências</b>.</li>
+      </ol>
+      <p class="note">Modelo: regras objetivas da UEFA (jogar +1, 60' +1, golo GR/DEF +6, MED +5, AV +4, assistência +3, baliza a zero GR/DEF +4 e MED +1, cada 2 golos sofridos −1, cada 3 bolas recuperadas +1, cada 3 defesas +1, homem do jogo +3, cartões, capitão ×2). Os pontos reais da UEFA batem com estas regras em 96,6% dos jogos (o resto são defesas de GR, que a UEFA não publica). Probabilidade de jogar pelos últimos 3 jogos e pelo estado da UEFA; golos e assistências por 90' ajustados ao adversário (odds ou, sem odds, preços das equipas).</p>
+    </div>
+    <div class="card lr-only">
       <h2>Como funciona o modelo</h2>
       <ul>
         <li><b>Minutos:</b> últimos 3 jogos da liga + época → probabilidade de jogar, de fazer 60'+ e 75'+.</li>
@@ -247,6 +263,8 @@
 <script src="js/pdf-import.js"></script>
 <script src="js/history-seed.js"></script>
 <script src="js/model.js"></script>
+<script src="js/ucl-model.js"></script>
+<script src="js/ucl-app.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

@@ -16,10 +16,53 @@ async function ligaRecordCollector() {
   box.style.cssText = 'position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:360px;padding:14px 16px;border-radius:10px;background:#c8102e;color:#fff;font:14px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)';
   box.textContent = 'Liga Record: a recolher dados…';
   document.body.appendChild(box);
-  const TOURNAMENT = 238; // Liga Portugal Betclic
   const PAUSE_MS = 120;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let calls = 0;
+  // Envia para a app que abriu este separador; sem app ligada, descarrega o ficheiro.
+  const deliver = (type, data, file) => {
+    window.__ligaRecordRunning = false;
+    try { if (window.opener && !window.opener.closed) { window.opener.postMessage({ type, data }, '*'); box.textContent = 'Concluído: dados enviados para a app. Podes fechar este separador.'; box.style.background = '#1a7f37'; return data; } } catch (e) { /* sem app */ }
+    if (!window.__LR_NO_DOWNLOAD) {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+      a.download = `${file}-${new Date().toISOString().slice(0, 10)}.json`; document.body.appendChild(a); a.click(); a.remove();
+    }
+    box.textContent = 'Concluído: ficheiro descarregado. Carrega-o na app.'; box.style.background = '#1a7f37';
+    return data;
+  };
+
+  // ---------- UEFA Champions League Fantasy (gaming.uefa.com): jogadores, preços, estatísticas e pontos por jornada ----------
+  if (/(^|\.)uefa\.com$/.test(location.hostname)) {
+    box.style.background = '#0b1f6b';
+    const feedNo = (performance.getEntriesByType('resource').map(e => e.name.match(/players_(\d+)_en/)).find(Boolean) || [])[1] || '90';
+    const feed = async p => { await sleep(PAUSE_MS); calls++; try { const r = await fetch('/en/uclfantasy/services/feeds/' + p); return r.ok ? r.json() : null; } catch (e) { return null; } };
+    const say = t => { box.textContent = 'Champions: ' + t + ' (' + calls + ' pedidos)'; };
+    say('a ler jornadas…');
+    const fx = (await feed(`fixtures/fixtures_${feedNo}_en.json`))?.data?.value || [];
+    const cur = fx.find(m => m.mdIsCurrent === 1) || fx.find(m => !m.mdIsLocked) || fx[fx.length - 1];
+    const md = cur.mdId;
+    const fixtures = fx.map(m => ({ md: m.mdId, deadline: m.deadline, locked: m.mdIsLocked, matches: (m.match || []).map(x => ({ id: x.mId, dt: x.dateTime,
+      home: { id: x.htId, name: x.htName, code: x.htCCode }, away: { id: x.atId, name: x.atName, code: x.atCCode },
+      hs: x.htScore === '' ? null : +x.htScore, as: x.atScore === '' ? null : +x.atScore, status: x.matchStatus })) }));
+    const list = (await feed(`players/players_${feedNo}_en_${md}.json`))?.data?.value?.playerList || [];
+    const players = list.map(p => ({ id: +p.id, name: p.pFName || p.pDName, short: p.pDName, tId: +p.tId, team: p.tName, code: p.cCode, pos: 'GDMF'[p.skill - 1],
+      price: p.value, status: p.pStatus || '', trained: p.trained || '', active: p.isActive, sel: p.selPer, tot: p.totPts, min: p.minsPlyd }));
+    // jogo a jogo, só para quem já jogou (o resto não tem histórico)
+    const hist = {}; const withMin = list.filter(p => p.minsPlyd > 0);
+    for (let i = 0; i < withMin.length; i++) {
+      if (i % 25 === 0) say(`jogadores ${i}/${withMin.length}…`);
+      const v = (await feed(`popupstats/popupstats_${feedNo}_${withMin[i].id}.json`))?.data?.value;
+      if (!v) continue;
+      const pts = Object.fromEntries((v.points || []).map(x => [x.mdId, x.tPoints]));
+      hist[withMin[i].id] = (v.stats || []).filter(s => s.mdId < md).map(s => ({ md: s.mdId, min: s.oF, g: s.gS, a: s.gA, cs: s.cS, gc: s.gC, y: s.yC, r: s.rC,
+        og: s.oG, br: s.bR, sv: s.saves, gob: s.gOB, pe: s.pE, pc: s.pC, pm: s.pM, ps: s.pS, mom: s.mOM, pts: pts[s.mdId] ?? null }));
+    }
+    const data = { meta: { created: new Date().toISOString(), md, deadline: cur.deadline, feedNo, calls }, fixtures, players, hist };
+    window.__uclData = data;
+    return deliver('ucl-data', data, 'uefa-fantasy');
+  }
+
+  const TOURNAMENT = 238; // Liga Portugal Betclic
   const api = async path => {
     await sleep(PAUSE_MS);
     calls++;
@@ -157,30 +200,36 @@ async function ligaRecordCollector() {
     log('Jornada', rd, 'ok');
   }
 
+  // 8. Champions: odds da próxima jornada (para o modo UEFA Champions League Fantasy)
+  const ucl = await uclOdds(api);
+  log('Champions: odds de', ucl.events.length, 'jogos');
+
   const data = { meta: { created: new Date().toISOString(), seasonId: season.id, seasonName: season.name, nextRound: currentRound, calls },
-    teams, players, positions, teamEvents, leagueStats, recent, next, odds, missing, rounds };
+    teams, players, positions, teamEvents, leagueStats, recent, next, odds, missing, rounds, ucl };
   window.__ligaRecordData = data;
-  window.__ligaRecordRunning = false;
-  // 1.º: enviar para a app que abriu este separador (botão "Atualizar Sofascore")
-  let sent = false;
-  try { if (window.opener && !window.opener.closed) { window.opener.postMessage({ type: 'liga-record-data', data }, '*'); sent = true; } } catch (e) { sent = false; }
-  if (sent) {
-    log('Concluído: dados enviados para a app. Podes fechar este separador.');
-    box.style.background = '#1a7f37';
-    return data;
+  return deliver('liga-record-data', data, 'sofascore');
+
+  async function uclOdds(api) {
+    const out = { created: new Date().toISOString(), events: [] };
+    try {
+      const s = (await api('unique-tournament/7/seasons'))?.seasons?.[0];
+      const nx = s && await api(`unique-tournament/7/season/${s.id}/events/next/0`);
+      const r0 = nx?.events?.[0]?.roundInfo?.round;
+      const dec = f => { const [a, b] = f.split('/').map(Number); return 1 + a / b; };
+      for (const e of (nx?.events || []).filter(e => e.roundInfo?.round === r0)) {
+        const o = await api(`event/${e.id}/odds/1/all`);
+        const ft = o?.markets?.find(m => m.marketName === 'Full time');
+        const goals = o?.markets?.find(m => m.marketName === 'Match goals' && +m.choiceGroup === 2.5);
+        const c = ft ? Object.fromEntries(ft.choices.map(c => [c.name, dec(c.fractionalValue)])) : {};
+        const g = goals ? Object.fromEntries(goals.choices.map(c => [c.name, dec(c.fractionalValue)])) : {};
+        const t = x => ({ name: x.name, short: x.shortName, code: x.nameCode });
+        out.events.push({ id: e.id, ts: e.startTimestamp, round: r0, home: t(e.homeTeam), away: t(e.awayTeam),
+          odds: ft ? { h: c['1'], d: c['X'], a: c['2'] } : null, over25: g.Over || null, under25: g.Under || null });
+      }
+    } catch (e) { /* sem Champions: o modo Liga Record funciona na mesma */ }
+    return out;
   }
-  // 2.º: sem app ligada → descarrega o ficheiro para carregar à mão
-  if (!window.__LR_NO_DOWNLOAD) {
-    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `sofascore-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-  }
-  log('Concluído: ficheiro descarregado. Carrega-o na app (botão "Dados Sofascore").');
-  box.style.background = '#1a7f37';
-  return data;
 }
 
-// Corre sozinho só quando está no sofascore.com (consola ou marcador); na app serve só para gerar o marcador.
-if (typeof location !== 'undefined' && /(^|\.)sofascore\.com$/.test(location.hostname)) ligaRecordCollector();
+// Corre sozinho só no sofascore.com ou no site da UEFA Fantasy (consola ou marcador); na app serve só para gerar o marcador.
+if (typeof location !== 'undefined' && /(^|\.)(sofascore|uefa)\.com$/.test(location.hostname)) ligaRecordCollector();

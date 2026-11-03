@@ -46,6 +46,16 @@ Projeto para gerir a equipa do utilizador na **Liga Record 2026/27** (fantasy do
 - **Backtest jornadas 3-9 (7 rondas, sem dados do futuro)**, pontos reais do onze ideal + treinador: original 343 (49,0/ronda) · pPlay rigoroso 349 · **rigoroso + 0,25×desvio LR da equipa 362 (51,7/ronda)** · +forma LR 15-50% 348-359 · só forma LR 304 · ótimo possível ~108/ronda. Spearman previsto×real ≈ 0,47 (a forma LR piora a ordenação). Escolhido: pPlay rigoroso (85% últimos 3 jogos, ×0,6 se falhou o último) + `TEAM_LR_WEIGHT = 0.25`, `LR_FORM_WEIGHT = 0`. Diferenças pequenas (~5%): repetir o backtest a cada PDF novo.
 - Desvio LR por equipa (pontos por exibição vs média, jornadas 2-9): Benfica +1,5 · Porto +1,4 · Santa Clara +0,6 · Sporting +0,6 · Arouca +0,5 · Académico +0,4 · Braga +0,4 … Estoril −1,0 · Rio Ave −1,1 · Marítimo −1,1. (Só nas rondas oficiais o Sporting estava abaixo; com as experimentais fica acima da média.)
 
+## Modo Champions (UEFA Champions League Fantasy)
+
+Seletor **Liga Record | Champions** no topo da app (`localStorage lr.mode`). Regras (gaming.uefa.com/en/uclfantasy/rules, 2026/27):
+- Plantel 15 (2 GR, 5 DEF, 5 MED, 3 AV), 100 M€ (105 depois da fase de liga), máx. 3 por clube (4-8 nas eliminatórias). Onze: 1 GR, ≥3 DEF, ≥2 MED, ≥1 AV. Capitão ×2.
+- Pontos: jogar +1, 60' +1, golo GR/DEF +6, MED +5, AV +4, golo de fora da área +1, assistência +3, baliza a zero (60'+) GR/DEF +4, MED +1, cada 2 golos sofridos GR/DEF −1, cada 3 defesas GR +1, cada 3 bolas recuperadas +1, homem do jogo +3, penálti ganho +2 / cometido −1 / falhado −2 / defendido +5, amarelo −1, vermelho −3, autogolo −2.
+- Transferências: 2 grátis por jornada na fase de liga (só 1 transita), −4 por cada extra; ilimitadas antes da fase de liga, dos play-offs e dos oitavos. Jokers: Wildcard e Limitless. Fecho = 1.º jogo da jornada; entre dias da jornada podem-se fazer até 4 substituições e mudar de capitão (para quem ainda não jogou).
+- **Dados:** o marcador "Liga Record ⚽" corrido em gaming.uefa.com lê os ficheiros públicos da Fantasy (`/en/uclfantasy/services/feeds/`: `fixtures_90_en.json`, `players_90_en_<jornada>.json`, `popupstats/popupstats_90_<id>.json` por jogador) e envia para a app (mensagem `ucl-data`). No sofascore.com, o mesmo marcador junta as odds 1X2 e de mais/menos 2,5 golos da próxima jornada da Champions (`data.ucl`).
+- Estados da UEFA: pStatus I lesionado, S castigado, NIS fora da convocatória, D dúvida; "Unlikely to start next game" = provável suplente.
+- **Calibração (jornadas 1-3, 2175 exibições):** as regras reproduzem os pontos reais da UEFA em 96,6% dos casos. Os outros são guarda-redes: o ficheiro não traz as defesas, por isso os pontos de defesas deduzem-se do total. Esta época tem 4,09 golos por jogo (LG = 2,05 por equipa). Médias por 90' em `PRIOR` (js/ucl-model.js). Backtest J2-J3 sem odds: média prevista dos titulares ≈ real por posição; Spearman 0,53-0,62 em todos, ~0,12 só entre titulares (muita variância).
+
 ## Estrutura
 
 ```
@@ -55,6 +65,8 @@ js/app.js                      interface (separadores: onze, transferências, jo
                                Histórico: guarda o onze de cada jornada até ao fecho (localStorage lr.history, vai no sync.json)
                                e calcula os pontos reais com o PDF (3 suplentes automáticos, capitão ×2, treinador)
                                — confirmado: bate certo com os pontos oficiais das rondas 1-4 (54, 27, 55, 65).
+js/ucl-model.js                modelo da Champions: odds → golos esperados, pontos por jogador, onze, transferências, plantel de raiz
+js/ucl-app.js                  interface do modo Champions (mesmos separadores; Histórico e Calibração só na Liga Record)
 js/history-seed.js             onzes das jornadas 6-10 (screenshots) + simulação: J6-J9 com o modelo sobre dados reconstruídos
                                da véspera (rounds do Sofascore + odds/xG/ausências por jogo; validado: J10 reconstruída = ±0,1/jogador)
                                e `alt` = onze do modelo com os mesmos 15. J6-J10: teu onze 270 pts reais (esperado 261) · modelo 258.

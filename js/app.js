@@ -45,6 +45,8 @@
     // onze personalizado: null = usar o melhor onze calculado
     lineup: ls.get('lineup', null), allCols: ls.get('allCols', false),
     // histórico: fotografia do onze de cada jornada (pontos esperados), por jornada da Liga
+    // modo: 'lr' = Liga Record, 'ucl' = UEFA Champions League Fantasy (js/ucl-app.js)
+    mode: ls.get('mode', 'lr'),
     history: (() => { // junta as jornadas importadas/simuladas (js/history-seed.js) ao que já está guardado
       const h = ls.get('history', {});
       for (const [j, s] of Object.entries(window.LR_HISTORY_SEED || {}))
@@ -76,6 +78,7 @@
   }
 
   function recompute() {
+    if (S.mode === 'ucl') { UCLApp.recompute(); return; }
     if (!S.data) return;
     applySeed();
     S.cal = LRModel.calibrate(S.data, S.lr);
@@ -88,6 +91,7 @@
   // ---------- topo: estado dos dados e fecho da jornada ----------
   const ago = d => { const h = (Date.now() - new Date(d)) / 36e5; return h < 1 ? 'há minutos' : h < 24 ? `há ${Math.round(h)} h` : `há ${Math.round(h / 24)} dia${h >= 36 ? 's' : ''}`; };
   function renderHeader() {
+    if (S.mode === 'ucl') { UCLApp.header(); return; }
     if (S.data) {
       const m = S.data.meta, h = (Date.now() - new Date(m.created)) / 36e5;
       $('#dotSofa').className = 'dot ' + (h < 48 ? 'ok' : 'old');
@@ -101,6 +105,7 @@
     tickDeadline();
   }
   function tickDeadline() {
+    if (S.mode === 'ucl') { UCLApp.tick(); return; }
     const el = $('#deadline'); if (!S.data) { el.hidden = true; return; }
     const first = Math.min(...Object.values(S.data.next).map(n => n.ts)); const close = (first - 15 * 60) * 1000; const ms = close - Date.now();
     el.hidden = false;
@@ -615,7 +620,7 @@
     el.querySelectorAll('.hOff').forEach(i => i.onchange = () => { S.history[+i.dataset.j].official = i.value === '' ? null : Math.round(+i.value); save(); renderHistorico(); });
   }
 
-  function renderAll() { renderOnze(); renderPlantel(); renderTrocas(); renderRanking(); renderJogos(); renderCalib(); renderHistorico(); }
+  function renderAll() { if (S.mode === 'ucl') { UCLApp.renderAll(); return; } renderOnze(); renderPlantel(); renderTrocas(); renderRanking(); renderJogos(); renderCalib(); renderHistorico(); }
 
   // preços editáveis em qualquer tabela
   document.addEventListener('change', e => {
@@ -638,13 +643,16 @@
   const setSofa = async (data, origem) => {
     if (!data || !data.meta || !Array.isArray(data.players) || !data.teams) throw new Error('ficheiro sem o formato do coletor');
     S.data = data; await idb.set('data', data); recompute();
-    notice(`✅ Dados do Sofascore atualizados (${origem}): ${data.players.length} jogadores, jornada ${data.meta.nextRound}.`, 'ok');
+    notice(`✅ Dados do Sofascore atualizados (${origem}): ${data.players.length} jogadores, jornada ${data.meta.nextRound}${data.ucl?.events?.length ? ` · odds de ${data.ucl.events.length} jogos da Champions` : ''}.`, 'ok');
   };
   const setLR = async (lr, origem) => {
     S.lr = lr; await idb.set('lr', lr); recompute();
     const js = lr.jds.map(x => x.j).sort((a, b) => a - b);
     notice(`✅ Pontuações atualizadas (${origem}): ${lr.players.length} pontuações, jornadas ${js.join(', ')}.`, 'ok');
   };
+
+  // utilitários partilhados com o modo Champions (js/ucl-app.js)
+  window.LRApp = { S, ls, idb, fmt, pct, esc, eur, posTag, notice, ago };
 
   // Marcador (bookmarklet) gerado a partir do próprio coletor
   if (typeof ligaRecordCollector === 'function') {
@@ -658,9 +666,30 @@
     notice('Abri o Sofascore num separador novo. Lá, clica no marcador <b>Liga Record ⚽</b> da barra de favoritos e espera 2-4 minutos (caixa vermelha → verde). Os dados aparecem aqui sozinhos. Ainda não tens o marcador? Vê o separador <b>Como usar</b>.');
   };
   window.addEventListener('message', async e => {
-    if (e.origin !== 'https://www.sofascore.com' || e.data?.type !== 'liga-record-data') return;
-    try { await setSofa(e.data.data, 'Sofascore'); } catch (err) { notice('❌ Os dados recebidos não são válidos: ' + esc(err.message), 'err'); }
+    try {
+      if (e.origin === 'https://www.sofascore.com' && e.data?.type === 'liga-record-data') await setSofa(e.data.data, 'Sofascore');
+      if (e.origin === 'https://gaming.uefa.com' && e.data?.type === 'ucl-data') await UCLApp.setData(e.data.data, 'UEFA Fantasy');
+    } catch (err) { notice('❌ Os dados recebidos não são válidos: ' + esc(err.message), 'err'); }
   });
+  // Botão UEFA Fantasy (modo Champions): abre o site da UEFA; o mesmo marcador recolhe lá os dados da Fantasy
+  $('#btnUefa').onclick = () => {
+    window.open(UCLApp.SITE, 'ligarecord-uefa');
+    notice('Abri a UEFA Champions League Fantasy num separador novo. Lá, clica no marcador <b>Liga Record ⚽</b> e espera 1-2 minutos (caixa azul → verde). Os dados aparecem aqui sozinhos.');
+  };
+  // Seletor Liga Record | Champions
+  function applyMode() {
+    document.body.classList.toggle('mode-ucl', S.mode === 'ucl');
+    document.querySelectorAll('#modeSel button').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
+    document.title = S.mode === 'ucl' ? 'Champions Fantasy – Previsões' : 'Liga Record – Previsões';
+    $('.brand .logo').textContent = S.mode === 'ucl' ? '⭐' : '⚽';
+    if (S.mode !== 'ucl') $('#teamName').textContent = 'MAN. CITY DA TEMU';
+    const on = $('#tabs button.on');
+    if (on && getComputedStyle(on).display === 'none') $('#tabs button[data-t="onze"]').click();
+  }
+  $('#modeSel').onclick = e => { const b = e.target.closest('button'); if (!b || b.dataset.m === S.mode) return;
+    S.mode = b.dataset.m; ls.set('mode', S.mode); applyMode();
+    if (S.mode === 'ucl' || S.data) recompute(); else renderAll();
+    renderHeader(); };
 
   // Botão PDFs: lê a pasta escolhida (fica memorizada) e extrai as pontuações com o pdf.js
   const loadScript = src => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('não consegui carregar ' + src)); document.head.appendChild(s); });
@@ -701,7 +730,7 @@
   // Telemóvel (site): ao abrir, vai buscar data/sync.json e aplica-o se for mais recente do que o que tem.
   const onWeb = /^https?:$/.test(location.protocol) && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   const bundle = () => ({ v: 1, created: new Date().toISOString(), data: S.data, lr: S.lr, squad: S.squad, prices: S.prices, saldo: S.saldo,
-    posOverride: S.posOverride, availOverride: S.availOverride, lineup: S.lineup, history: S.history });
+    posOverride: S.posOverride, availOverride: S.availOverride, lineup: S.lineup, history: S.history, ucl: UCLApp.bundle() });
   function renderSync() {
     const st = ls.get('syncStamp', null);
     $('#dotSync').className = 'dot ' + (st ? (Date.now() - new Date(st) < 2 * 864e5 ? 'ok' : 'old') : 'none');
@@ -745,6 +774,7 @@
       if (Array.isArray(b.squad) && b.squad.length) Object.assign(S, { squad: b.squad, prices: b.prices || {}, saldo: b.saldo ?? S.saldo,
         posOverride: b.posOverride || {}, availOverride: b.availOverride || {}, lineup: b.lineup || null, seedPending: false });
       // histórico: junta o do PC com o do telemóvel (os pontos oficiais escritos no telemóvel não se perdem)
+      await UCLApp.applyBundle(b.ucl);
       for (const [j, h] of Object.entries(b.history || {})) S.history[j] = { ...h, official: h.official ?? S.history[j]?.official ?? null };
       await idb.set('data', S.data); if (S.lr) await idb.set('lr', S.lr);
       ls.set('syncStamp', b.created); save();
@@ -755,14 +785,18 @@
 
   // ficheiros à mão
   $('#fSofa').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { await setSofa(JSON.parse(await f.text()), f.name); } catch (err) { notice('❌ ' + esc(err.message), 'err'); } };
+  $('#fUefa').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { await UCLApp.setData(JSON.parse(await f.text()), f.name); } catch (err) { notice('❌ ' + esc(err.message), 'err'); } };
   $('#fLR').onchange = async e => { const f = e.target.files[0]; if (!f) return; await setLR(JSON.parse(await f.text()), f.name); };
 
   (async () => {
     S.data = window.__LR_PRELOAD?.data || await idb.get('data');
     S.lr = window.__LR_PRELOAD?.lr || await idb.get('lr');
+    await UCLApp.init();
     await loadSync(); // no site (telemóvel): dados mais recentes publicados a partir do PC
     renderSync();
-    if (S.data) recompute(); else renderAll();
+    applyMode();
+    if (S.data || S.mode === 'ucl') recompute(); else renderAll();
+    renderHeader();
     if (onWeb) $('#btnSofa').closest('.src').title += ' · no telemóvel: usa o marcador escrevendo "Liga Record" na barra de endereço';
   })();
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
