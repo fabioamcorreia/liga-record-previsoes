@@ -287,12 +287,12 @@ const UCLApp = (() => {
   function table(list, { add = false } = {}) {
     const { fmt, pct, esc, posTag } = A();
     const mine = new Set(st().squad);
-    return `<div style="overflow-x:auto"><table><tr><th>Pos</th><th>Jogador</th><th>Jogo</th><th class="num">Pts esp.</th><th class="num" title="probabilidade de jogar">Joga</th><th class="num">P(golo)</th><th class="num">P(assist.)</th><th class="num" title="probabilidade de ter os pontos de baliza a zero (60'+ sem sofrer)">P(baliza 0)</th><th class="num" title="pontos por jogo nos últimos 3 jogos em que jogou">Forma</th><th class="num" title="golos esperados por 90' na Champions (Sofascore)">xG/90</th><th class="num" title="assistências esperadas por 90' na Champions (Sofascore)">xA/90</th><th class="num">Méd. real</th><th class="num">Preço</th>${add ? '<th></th>' : ''}</tr>
+    return `<div style="overflow-x:auto"><table><tr><th>Pos</th><th>Jogador</th><th>Jogo</th><th class="num">Pts esp.</th><th class="num" title="probabilidade de jogar">Joga</th><th class="num">P(golo)</th><th class="num">P(assist.)</th><th class="num" title="probabilidade de ter os pontos de baliza a zero (60'+ sem sofrer)">P(baliza 0)</th><th class="num" title="pontos por jogo nos últimos 3 jogos em que jogou">Forma</th><th class="num" title="golos esperados por 90' na Champions (Sofascore)">xG/90</th><th class="num" title="assistências esperadas por 90' na Champions (Sofascore)">xA/90</th><th class="num" title="pontos por jogo na Champions (jogos)">Méd. real</th><th class="num" title="pontos totais na Champions">Total</th><th class="num" title="% de equipas da UEFA Fantasy que o escolheram">Escolhido</th><th class="num">Preço</th>${add ? '<th></th>' : ''}</tr>
       ${list.map(p => `<tr><td>${posTag(p.pos)}</td><td><b>${esc(p.name)}</b>${p.status ? ` <span class="${p.pPlay < 0.2 ? 'bad' : 'warn'}">${esc(p.status)}</span>` : ''}</td>
         <td>${esc(p.team)} <span class="muted">${esc(p.opp)} · ${day(p.ts)}</span></td><td class="num"><span class="pts ${p.pts >= 5 ? 'hi' : ''}">${fmt(p.pts)}</span></td>
         <td class="num">${pct(p.pPlay)}</td><td class="num">${pct(p.Pg)}</td><td class="num">${pct(p.Pa)}</td><td class="num">${p.pos === 'F' ? '–' : pct(p.pCS)}</td>
         <td class="num">${p.form == null ? '–' : fmt(p.form)}</td><td class="num">${p.xg90 == null ? '–' : fmt(p.xg90, 2)}</td><td class="num">${p.xa90 == null ? '–' : fmt(p.xa90, 2)}</td>
-        <td class="num">${p.avgPts == null ? '–' : fmt(p.avgPts)}<span class="muted"> (${p.games})</span></td><td class="num">${m1(p.price)}</td>
+        <td class="num">${p.avgPts == null ? '–' : fmt(p.avgPts)}<span class="muted"> (${p.games})</span></td><td class="num">${p.tot ?? '–'}</td><td class="num">${p.sel == null ? '–' : fmt(p.sel, 0) + '%'}</td><td class="num">${m1(p.price)}</td>
         ${add ? `<td>${mine.has(p.id) ? '<span class="good">✓</span>' : `<button class="btn uAdd" data-id="${p.id}">+</button>`}</td>` : ''}</tr>`).join('')}</table></div>`;
   }
 
@@ -366,7 +366,7 @@ const UCLApp = (() => {
   function renderRanking() {
     const el = $('#ranking'); if (!U.data) { el.innerHTML = noData(); return; }
     const r = U.rank ||= { pos: 'all', q: '', max: '', by: 'pts' };
-    const SORT = { pts: ['Pts esp.', p => p.pts], pPlay: ['Joga', p => p.pPlay], Pg: ['P(golo)', p => p.Pg], pCS: ['P(baliza 0)', p => p.pCS], form: ['Forma', p => p.form ?? -9], xg90: ['xG/90', p => p.xg90 ?? -9], xa90: ['xA/90', p => p.xa90 ?? -9] };
+    const SORT = { pts: ['Pts esp.', p => p.pts], pPlay: ['Joga', p => p.pPlay], Pg: ['P(golo)', p => p.Pg], pCS: ['P(baliza 0)', p => p.pCS], form: ['Forma', p => p.form ?? -9], xg90: ['xG/90', p => p.xg90 ?? -9], xa90: ['xA/90', p => p.xa90 ?? -9], tot: ['Pontos totais', p => p.tot ?? -9], sel: ['Escolhido %', p => p.sel ?? -9] };
     const { norm } = UCLModel;
     const list = U.proj.players.filter(p => (r.pos === 'all' || p.pos === r.pos) && (!r.q || norm(p.name + ' ' + p.team).includes(norm(r.q))) && (!r.max || p.price <= +r.max))
       .sort((a, b) => SORT[r.by || 'pts'][1](b) - SORT[r.by || 'pts'][1](a) || b.pts - a.pts).slice(0, 150);
