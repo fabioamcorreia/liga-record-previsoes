@@ -43,9 +43,11 @@
     posOverride: ls.get('posOverride', {}), availOverride: ls.get('availOverride', {}),
     rank: { pos: 'all', team: 'all', q: '', sort: 'pts', dir: -1 }, onlyAffordable: false,
     // onze personalizado: null = usar o melhor onze calculado
-    lineup: ls.get('lineup', null), allCols: ls.get('allCols', false)
+    lineup: ls.get('lineup', null), allCols: ls.get('allCols', false),
+    // histórico: fotografia do onze de cada jornada (pontos esperados), por jornada da Liga
+    history: ls.get('history', {})
   };
-  const save = () => { ls.set('squad', S.squad); ls.set('prices', S.prices); ls.set('saldo', S.saldo); ls.set('posOverride', S.posOverride); ls.set('availOverride', S.availOverride); ls.set('lineup', S.lineup); };
+  const save = () => { ls.set('squad', S.squad); ls.set('prices', S.prices); ls.set('saldo', S.saldo); ls.set('posOverride', S.posOverride); ls.set('availOverride', S.availOverride); ls.set('lineup', S.lineup); ls.set('history', S.history); };
 
   function findPlayer(name, teamHint) {
     const n = LRModel.norm(name), th = LRModel.norm(teamHint || '');
@@ -178,6 +180,7 @@
     const L = custom ? sanitizeLineup(S.lineup, sq, coach) : bestL;
     if (custom) S.lineup = { ...L, stamp };
     const tot = lineupTotal(L, coach), bestTot = lineupTotal(bestL, coach);
+    saveSnapshot(L, coach, tot);
     const diff = tot.total - bestTot.total;
     const inXI = new Set(L.xi);
     const xiP = L.xi.map(id => S.byId[id]);
@@ -514,7 +517,87 @@
         ${diffs.map(d => `<tr><td>${esc(d.name)}</td><td>${esc(d.team)}</td><td>${posTag(d.sofa)}</td><td>${posTag(d.lr)}</td><td class="num">${d.tot ?? '–'}</td></tr>`).join('')}</table></div>`;
   }
 
-  function renderAll() { renderOnze(); renderPlantel(); renderTrocas(); renderRanking(); renderJogos(); renderCalib(); }
+  // ---------- histórico de jornadas: esperado vs real ----------
+  const closeTime = () => (Math.min(...Object.values(S.data.next).map(n => n.ts)) - 15 * 60) * 1000;
+  // Guarda o onze do ecrã como a aposta da jornada. Só com dados de antes do fecho; depois do fecho fica congelado.
+  function saveSnapshot(L, coachList, tot) {
+    const j = S.data.meta.nextRound, close = closeTime();
+    if (new Date(S.data.meta.created) >= close) return;
+    const old = S.history[j];
+    if (old && Date.now() >= close) return;
+    const pl = id => { const p = S.byId[id]; return { id, n: p.name, t: p.team, pos: p.pos, pts: +p.pts.toFixed(2) }; };
+    const c = coachList.find(x => x.teamId === L.coach);
+    const snap = { j, close, formation: L.formation, xi: L.xi.map(pl), bench: L.bench.map(pl), captain: L.captain,
+      coach: c ? { teamId: c.teamId, t: c.team, pts: +c.pts.toFixed(2) } : null, exp: +tot.total.toFixed(2) };
+    if (old && JSON.stringify({ ...old, official: undefined, saved: undefined }) === JSON.stringify(snap)) return;
+    S.history[j] = { ...snap, saved: new Date().toISOString(), official: old?.official ?? null }; save();
+    renderHistorico();
+  }
+
+  // Pontos reais pelas regras da LR: até 3 suplentes da mesma posição, pela ordem do banco, entram por quem
+  // não jogou; o suplente do capitão herda a braçadeira; soma o treinador.
+  function realPoints(h) {
+    if (!(S.lr?.players || []).some(x => x.j === h.j)) return null; // ainda sem o PDF desta jornada
+    const pts = id => S.cal?.lrByPid[id]?.pts?.[h.j];
+    const played = new Set(), teams = new Set();
+    for (const e of S.data.rounds?.[h.j] || []) { teams.add(e.homeId); teams.add(e.awayId); for (const r of e.players) if (r.min > 0) played.add(r.pid); }
+    // com os minutos do Sofascore da equipa usa-os; senão: sem pontos ou −1 (não utilizado) = não jogou
+    const didPlay = id => (teams.has(S.byId[id]?.teamId) ? played.has(id) : pts(id) != null && pts(id) !== -1);
+    const rows = h.xi.map(p => ({ ...p, real: pts(p.id) ?? null, played: didPlay(p.id), cap: p.id === h.captain }));
+    const used = new Set();
+    for (const r of rows) {
+      if (r.played || used.size >= 3) continue;
+      const s = h.bench.find(b => b.pos === r.pos && !used.has(b.id) && didPlay(b.id));
+      if (s) { used.add(s.id); r.sub = { ...s, real: pts(s.id) ?? 0 }; }
+    }
+    let xi = 0;
+    for (const r of rows) { r.counted = (r.sub ? r.sub.real : r.real ?? 0) * (r.cap ? 2 : 1); xi += r.counted; }
+    const ch = h.coach && (S.lr.coaches || []).find(c => c.j === h.j && LRModel.teamIdForClub(S.data, c.c) === h.coach.teamId);
+    return { rows, xi, coach: ch ? ch.p : null, coachName: ch?.n, total: xi + (ch ? ch.p : 0), subs: used.size };
+  }
+
+  function renderHistorico() {
+    const el = $('#historico');
+    const list = Object.values(S.history).sort((a, b) => b.j - a.j);
+    if (!list.length) { el.innerHTML = `<div class="card empty"><span class="ic">📅</span>Ainda sem jornadas guardadas.<br>A app guarda sozinha o onze de <b>O meu onze</b> antes do fecho de cada jornada; quando chegar o PDF das pontuações, aparecem aqui os pontos reais.</div>`; return; }
+    const R = list.map(h => ({ h, re: S.data ? realPoints(h) : null }));
+    const done = R.filter(x => x.re), off = R.filter(x => x.h.official != null);
+    const expT = done.reduce((s, x) => s + x.h.exp, 0), realT = done.reduce((s, x) => s + x.re.total, 0);
+    const POSN = { G: 'GR', D: 'DEF', M: 'MED', F: 'AV' };
+    const sg = d => (d > 0 ? '+' : '') + fmt(d);
+    const rnd = j => (j > LRModel.ROUND_OFFSET ? `ronda ${j - LRModel.ROUND_OFFSET}` : 'experimental');
+    const status = h => (Date.now() < h.close ? 'por jogar' : 'à espera do PDF');
+    const detail = ({ h, re }) => {
+      const rows = re ? re.rows : h.xi.map(p => ({ ...p, cap: p.id === h.captain }));
+      const note = r => (!re || r.played ? '' : r.sub ? `não jogou → entrou ${esc(r.sub.n)} (${r.sub.real})` : 'não jogou, sem suplente');
+      return `<table><tr><th>Pos.</th><th>Jogador</th><th class="num">Esperado</th><th class="num">Real</th><th></th></tr>
+        ${rows.map(r => `<tr><td>${posTag(r.pos)}</td><td>${esc(r.n)}${r.cap ? ' <span class="tag ok">C ×2</span>' : ''} <span class="muted">${esc(r.t)}</span></td>
+          <td class="num">${fmt(r.pts * (r.cap ? 2 : 1))}</td><td class="num">${re ? `<b>${r.counted}</b>` : '–'}</td><td class="muted">${note(r)}</td></tr>`).join('')}
+        ${h.coach ? `<tr><td><span class="tag q">TR</span></td><td>Treinador ${esc(re?.coachName || '')} <span class="muted">${esc(h.coach.t)}</span></td>
+          <td class="num">${fmt(h.coach.pts)}</td><td class="num">${re ? `<b>${re.coach ?? '–'}</b>` : '–'}</td><td></td></tr>` : ''}
+        </table><p class="note">Banco (por ordem): ${h.bench.map(b => `${esc(b.n)} (${POSN[b.pos]})`).join(' · ')}</p>`;
+    };
+    el.innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><div class="l">Jornadas com resultado</div><div class="v">${done.length}</div><div class="s">${list.length} guardada${list.length > 1 ? 's' : ''}</div></div>
+        <div class="kpi"><div class="l">Pontos esperados</div><div class="v">${done.length ? fmt(expT) : '–'}</div><div class="s">${done.length ? fmt(expT / done.length) + ' por jornada' : 'à espera do PDF'}</div></div>
+        <div class="kpi"><div class="l">Pontos reais (calculados)</div><div class="v">${done.length ? realT : '–'}</div><div class="s">${done.length ? fmt(realT / done.length) + ' por jornada' : ''}</div></div>
+        <div class="kpi"><div class="l">Real − esperado</div><div class="v">${done.length ? sg(realT - expT) : '–'}</div><div class="s">${off.length ? `oficial: ${off.reduce((s, x) => s + x.h.official, 0)} pts em ${off.length} jornada${off.length > 1 ? 's' : ''}` : 'escreve os pontos oficiais para confirmar'}</div></div>
+      </div>
+      <div class="card"><h2>Histórico de jornadas</h2>
+        <p class="note">O onze de <b>O meu onze</b> fica guardado sozinho até ao fecho de cada jornada. O real é calculado com o PDF das pontuações (suplentes automáticos, capitão ×2, treinador); em <b>Oficial</b> escreve os pontos que a Liga Record te deu.</p>
+        <table><tr><th>Jornada</th><th>Tática</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Diferença</th><th class="num">Oficial</th></tr>
+        ${R.map(({ h, re }) => { const d = re ? re.total - h.exp : null; return `<tr>
+          <td><b>J${h.j}</b> <span class="muted">${rnd(h.j)}</span></td><td>${esc(h.formation)}</td><td class="num">${fmt(h.exp)}</td>
+          <td class="num">${re ? `<span class="pts hi">${re.total}</span>` : `<span class="tag q">${status(h)}</span>`}</td>
+          <td class="num">${d == null ? '–' : `<span class="tag ${d >= 0 ? 'ok' : 'no'}">${sg(d)}</span>`}</td>
+          <td class="num"><input class="hOff" data-j="${h.j}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`; }).join('')}
+        </table></div>
+      ${R.map(x => `<details class="card"><summary><b>J${x.h.j}</b> · ${esc(x.h.formation)} · esperado ${fmt(x.h.exp)}${x.re ? ` · real ${x.re.total}${x.re.subs ? ` (${x.re.subs} suplente${x.re.subs > 1 ? 's' : ''} entrou${x.re.subs > 1 ? 'aram' : ''})` : ''}` : ''}</summary>${detail(x)}</details>`).join('')}`;
+    el.querySelectorAll('.hOff').forEach(i => i.onchange = () => { S.history[+i.dataset.j].official = i.value === '' ? null : Math.round(+i.value); save(); renderHistorico(); });
+  }
+
+  function renderAll() { renderOnze(); renderPlantel(); renderTrocas(); renderRanking(); renderJogos(); renderCalib(); renderHistorico(); }
 
   // preços editáveis em qualquer tabela
   document.addEventListener('change', e => {
@@ -600,7 +683,7 @@
   // Telemóvel (site): ao abrir, vai buscar data/sync.json e aplica-o se for mais recente do que o que tem.
   const onWeb = /^https?:$/.test(location.protocol) && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   const bundle = () => ({ v: 1, created: new Date().toISOString(), data: S.data, lr: S.lr, squad: S.squad, prices: S.prices, saldo: S.saldo,
-    posOverride: S.posOverride, availOverride: S.availOverride, lineup: S.lineup });
+    posOverride: S.posOverride, availOverride: S.availOverride, lineup: S.lineup, history: S.history });
   function renderSync() {
     const st = ls.get('syncStamp', null);
     $('#dotSync').className = 'dot ' + (st ? (Date.now() - new Date(st) < 2 * 864e5 ? 'ok' : 'old') : 'none');
@@ -643,6 +726,8 @@
       Object.assign(S, { data: b.data || S.data, lr: b.lr || S.lr });
       if (Array.isArray(b.squad) && b.squad.length) Object.assign(S, { squad: b.squad, prices: b.prices || {}, saldo: b.saldo ?? S.saldo,
         posOverride: b.posOverride || {}, availOverride: b.availOverride || {}, lineup: b.lineup || null, seedPending: false });
+      // histórico: junta o do PC com o do telemóvel (os pontos oficiais escritos no telemóvel não se perdem)
+      for (const [j, h] of Object.entries(b.history || {})) S.history[j] = { ...h, official: h.official ?? S.history[j]?.official ?? null };
       await idb.set('data', S.data); if (S.lr) await idb.set('lr', S.lr);
       ls.set('syncStamp', b.created); save();
       notice(`✅ Dados sincronizados do PC (publicados ${ago(b.created)}).`, 'ok');

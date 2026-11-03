@@ -377,6 +377,6 @@ const LRModel = (() => {
     return out.sort((a, b) => b.gain - a.gain || a.out.pts - b.out.pts);
   }
 
-  return { project, calibrate, coaches, bestXI, transfers, teamStrength, matchProbs, norm, FORMATIONS, DEFAULT_GRADE, ROUND_OFFSET };
+  return { project, calibrate, coaches, bestXI, transfers, teamStrength, matchProbs, norm, teamIdForClub, FORMATIONS, DEFAULT_GRADE, ROUND_OFFSET };
 })();
 if (typeof module !== 'undefined') module.exports = LRModel;

@@ -51,7 +51,9 @@ Projeto para gerir a equipa do utilizador na **Liga Record 2026/27** (fantasy do
 ```
 index.html                     app (abrir no Chrome; dados guardados em IndexedDB/localStorage)
 js/model.js                    modelo: força das equipas, probabilidades, calibração, projeção, onze, transferências
-js/app.js                      interface (separadores: onze, plantel, transferências, ranking, jogos, calibração)
+js/app.js                      interface (separadores: onze, transferências, jogos, histórico, ranking, plantel, calibração).
+                               Histórico: guarda o onze de cada jornada até ao fecho (localStorage lr.history, vai no sync.json)
+                               e calcula os pontos reais com o PDF (3 suplentes automáticos, capitão ×2, treinador)
 collector/sofascore-collector.js  função ligaRecordCollector(); a app gera com ela o marcador "Liga Record ⚽" (bookmarklet).
                                No sofascore.com: envia os dados à app por postMessage (botão "Atualizar Sofascore") ou descarrega .json
 js/pdf-import.js               lê os PDFs no browser (pdf.js 3.11.174 da cdnjs, worker na própria página); igual ao parser Python
