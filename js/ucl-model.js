@@ -12,10 +12,16 @@ const UCLModel = (() => {
   // Médias reais da época por 90' (jornadas 1-3, 1686 exibições), usadas quando o jogador tem poucos minutos.
   // A Champions 2026/27 tem 4,09 golos por jogo → LG = 2,05 golos por equipa.
   const LG = 2.05;
-  const PRIOR = { g: { G: 0, D: 0.076, M: 0.21, F: 0.53 }, a: { G: 0.005, D: 0.083, M: 0.21, F: 0.26 },
-    br: { G: 0.3, D: 5.1, M: 3.3, F: 1.4 }, y: { G: 0.02, D: 0.125, M: 0.116, F: 0.092 }, gob: { G: 0, D: 0.06, M: 0.21, F: 0.09 },
+  const PRIOR = { br: { G: 0.3, D: 5.1, M: 3.3, F: 1.4 }, y: { G: 0.02, D: 0.125, M: 0.116, F: 0.092 }, gob: { G: 0, D: 0.06, M: 0.21, F: 0.09 },
     svPts: 0.7 }; // pontos de defesas por jogo do GR (o ficheiro da UEFA não traz as defesas: deduzem-se dos pontos)
-  const K = 2.5; // peso do prior, em jogos de 90'
+  // O preço da Fantasy prevê muito bem golos, assistências e homem do jogo (ajuste de Poisson nas jornadas 1-3):
+  // taxa = base × e^(k × (preço − 6)). Ex.: AV de 11 M€ ≈ 1,3 golos/90', AV de 5 M€ ≈ 0,34.
+  const PRICE = { g: { G: [0, 0], D: [0.133, 0.39], M: [0.206, 0.40], F: [0.423, 0.23] }, a: { G: [0.005, 0], D: [0.085, 0.02], M: [0.214, 0.28], F: [0.214, 0.21] },
+    mom: { G: [0.007, 0.79], D: [0.042, 0.53], M: [0.039, 0.55], F: [0.021, 0.62] } }; // mom = por jogo
+  const byPrice = (k, p) => PRICE[k][p.pos][0] * Math.exp(PRICE[k][p.pos][1] * (p.price - 6));
+  // sem jogos da equipa (1.ª jornada): probabilidade de jogar pelo preço (observado nas jornadas 1-3)
+  const PLAY = { G: [[6, 0.95], [5, 0.75], [0, 0.2]], D: [[6, 0.9], [5, 0.68], [4, 0.45], [0, 0.5]], M: [[8, 0.88], [7, 0.8], [6, 0.68], [5, 0.55], [0, 0.4]], F: [[8, 0.85], [6, 0.74], [5, 0.35], [0, 0.5]] };
+  const K = 6; // peso do prior, em jogos de 90' (backtest J1-J3: 6 dá o menor erro)
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
   const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
   const pois = (l, k) => { let f = 1; for (let i = 2; i <= k; i++) f *= i; return Math.exp(-l) * Math.pow(l, k) / f; };
@@ -85,8 +91,10 @@ const UCLModel = (() => {
       for (let i = 0; i < 10; i++) for (let j = 0; j < 10; j++) { const p = pois(lh, i) * pois(la, j); if (i > j) pw += p; else if (i === j) pd += p; }
       const ts = ev?.ts ? ev.ts * 1000 : cetMs(m.dt);
       const g = { id: m.id, ts, home: m.home, away: m.away, lh, la, pHome: pw, pDraw: pd, pAway: 1 - pw - pd, src };
-      out[m.home.id] = { ...g, me: m.home, opp: m.away, isHome: true, lf: lh, la_: la, pw, pl: 1 - pw - pd };
-      out[m.away.id] = { ...g, me: m.away, opp: m.home, isHome: false, lf: la, la_: lh, pw: 1 - pw - pd, pl: pw };
+      // typ = golos habituais da equipa (contra um adversário médio): o preço do jogador já os reflete
+      const typ = id => LG * Math.pow((tp.pw[id] || tp.avg) / tp.avg, 1.3);
+      out[m.home.id] = { ...g, me: m.home, opp: m.away, isHome: true, lf: lh, la_: la, pw, pl: 1 - pw - pd, typ: typ(m.home.id) };
+      out[m.away.id] = { ...g, me: m.away, opp: m.home, isHome: false, lf: la, la_: lh, pw: 1 - pw - pd, pl: pw, typ: typ(m.away.id) };
     }
     return out;
   }
@@ -122,8 +130,7 @@ const UCLModel = (() => {
       const last = mds.slice(0, 3).map(md => byMd[md]?.min || 0);
       // probabilidade de jogar: últimos 3 jogos da equipa (o mais recente pesa mais)
       const w = [0.5, 0.3, 0.2].slice(0, last.length), ws = w.reduce((s, v) => s + v, 0) || 1;
-      // sem jogos da equipa (1.ª jornada): o preço da Fantasy indica quem é titular
-      let pPlay = last.length ? last.reduce((s, m, i) => s + (m > 0 ? w[i] : 0), 0) / ws : clamp((p.price - 4) / 3, 0.25, 0.9);
+      let pPlay = last.length ? last.reduce((s, m, i) => s + (m > 0 ? w[i] : 0), 0) / ws : PLAY[p.pos].find(([t]) => p.price >= t)[1];
       if (last.length && last[0] === 0) pPlay *= 0.7;
       pPlay = Math.min(pPlay, 0.92) * statusFactor(p); // backtest: titulares "certos" jogaram 81-89% das vezes
       if (avail[p.id] != null) pPlay = avail[p.id];
@@ -133,9 +140,10 @@ const UCLModel = (() => {
       const p60 = pPlay * p60c, expMin = pPlay * minIfPlay;
       const sum = k => played.reduce((s, x) => s + (x[k] || 0), 0);
       const rate = (k, prior) => (sum(k) + K * prior) / (mins / 90 + K); // por 90'
-      const attack = g.lf / LG, defence = g.la_ / LG;
-      const eg = rate('g', PRIOR.g[p.pos]) * expMin / 90 * attack;
-      const ea = rate('a', PRIOR.a[p.pos]) * expMin / 90 * attack;
+      // ataque face ao habitual da equipa (não face à média da prova: senão a força da equipa contava duas vezes)
+      const attack = g.lf / g.typ, defence = g.la_ / LG;
+      const eg = rate('g', byPrice('g', p)) * expMin / 90 * attack;
+      const ea = rate('a', byPrice('a', p)) * expMin / 90 * attack;
       const Pg = 1 - Math.exp(-eg);
       const cs = Math.exp(-g.la_);
       let pts = pPlay * 1 + p60 * 1 + eg * GOAL[p.pos] + ea * 3 + p60 * cs * CS[p.pos];
@@ -150,9 +158,8 @@ const UCLModel = (() => {
       }
       pts += gcPts + svPts;
       pts -= rate('y', PRIOR.y[p.pos]) * expMin / 90 + 3 * 0.005 * pPlay;
-      // homem do jogo: quem decide (golo/assistência) em equipas que ganham; histórico conta
-      const momRate = (sum('mom') + 0.03 * K) / (played.length + K);
-      const pMom = clamp(0.35 * momRate * pPlay + 0.22 * Pg * (0.5 + g.pw) + 0.06 * (1 - Math.exp(-ea)), 0, 0.6);
+      // homem do jogo: taxa pelo preço + histórico, mais provável quando a equipa ganha
+      const pMom = clamp((sum('mom') + K * byPrice('mom', p)) / (played.length + K) * pPlay * (0.55 + g.pw), 0, 0.6);
       pts += 3 * pMom;
       const realPts = played.map(x => x.pts).filter(v => v != null);
       out.push({ id: p.id, name: p.name, short: p.short, team: p.team, teamId: p.tId, code: p.code, pos: p.pos, price: p.price,
