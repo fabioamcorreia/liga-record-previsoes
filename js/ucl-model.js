@@ -419,6 +419,26 @@ const UCLModel = (() => {
     return { squad: sq, moves, bank: money, hits, ev: plan(sq, { n: 400, iters: 3 }).ev - hits };
   }
 
+  // De um plantel para outro, troca a troca: emparelha por posição (o melhor que sai com o melhor que entra), ordena
+  // pelo ganho esperado de cada par e simula a jornada depois de cada troca → ganho de cada jogador e total acumulado.
+  function explainChanges(oldSq, newSq, { n = 300 } = {}) {
+    const keep = new Set(newSq.map(p => p.id)), had = new Set(oldSq.map(p => p.id));
+    const pairs = [];
+    for (const pos of ['G', 'D', 'M', 'F']) {
+      const outs = oldSq.filter(p => p.pos === pos && !keep.has(p.id)).sort((a, b) => b.pts - a.pts);
+      const ins = newSq.filter(p => p.pos === pos && !had.has(p.id)).sort((a, b) => b.pts - a.pts);
+      outs.forEach((o, i) => ins[i] && pairs.push({ out: o, in: ins[i] }));
+    }
+    pairs.sort((a, b) => (b.in.pts - b.out.pts) - (a.in.pts - a.out.pts));
+    let sq = oldSq.slice(), prev = plan(sq, { n, iters: 2 }).ev; const base = prev, steps = [];
+    for (const t of pairs) {
+      sq = sq.map(p => (p.id === t.out.id ? t.in : p));
+      const ev = plan(sq, { n, iters: 2 }).ev;
+      steps.push({ ...t, gain: ev - prev, ev, cost: t.in.price - t.out.price }); prev = ev;
+    }
+    return { base, steps, ev: prev };
+  }
+
   // Projeção de uma jornada futura da fase de liga (sem odds: força das equipas pelos preços)
   const projectMd = (data, md, sofaUcl) => project({ ...data, meta: { ...data.meta, md } }, md === data.meta.md ? sofaUcl : null);
   // jogadores com os pontos somados de várias jornadas (para escolher um plantel para um período)
@@ -466,7 +486,7 @@ const UCLModel = (() => {
     return { rows, bestL, bestW };
   }
 
-  return { project, projectMd, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, improveSquad, seasonPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
+  return { project, projectMd, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, improveSquad, explainChanges, seasonPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
     setFormW: w => { FORM_W = w; } };
 })();
 if (typeof module !== 'undefined') module.exports = UCLModel;

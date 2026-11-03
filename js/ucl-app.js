@@ -516,15 +516,34 @@ const UCLApp = (() => {
       else if (mode === 'wc' && g) squad = g.wc.squad;
       else if (mode === 'lim' && g) squad = g.lim.squad;
       else squad = UCLModel.buildSquad(U.proj.players, mode === 'lim' ? 999 : mode === 'wc' ? sqValue(sq) + (+st().bank || 0) : 100, 3).squad;
-      U.built = { squad, cost: sqValue(squad), pl: UCLModel.plan(squad), moves, label, mode };
+      U.built = { squad, cost: sqValue(squad), pl: UCLModel.plan(squad), moves, label, mode, ex: UCLModel.explainChanges(sq, squad), bank0: +st().bank || 0, value0: sqValue(sq) };
       renderPlantel();
     }, 60);
+  }
+  // Simulação jogador a jogador: cada troca aplicada por ordem, com a jornada simulada depois de cada uma
+  function changesHtml(b) {
+    const { esc, fmt, pct, posTag } = A(), ex = b.ex;
+    if (!ex.steps.length) return '<p class="muted">É o teu plantel atual: nenhuma troca.</p>';
+    const hits = b.mode === 'imp' ? Math.max(0, ex.steps.length - (+st().freeT || 0)) * 4 : 0;
+    const sg = x => `<span class="${x >= 0.05 ? 'good' : x <= -0.05 ? 'bad' : 'muted'}">${x >= 0 ? '+' : ''}${fmt(x)}</span>`;
+    const info = p => `${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} · joga ${pct(p.pPlay)} · ${p.pos === 'G' || p.pos === 'D' ? 'baliza 0 ' + pct(p.pCS) : 'golo ' + pct(p.Pg)}${p.form != null ? ' · forma ' + fmt(p.form) : ''}`;
+    const money = b.mode === 'lim' ? null : b.value0 + b.bank0 - b.cost;
+    return `<h2 style="margin:12px 0 6px">Jogador a jogador <span class="sub">cada troca simulada por ordem (jornada com as trocas ao intervalo); o ganho de um jogador depende dos que já entraram</span></h2>
+      <div style="overflow-x:auto"><table><tr><th>#</th><th>Sai</th><th class="num">Pts</th><th>Entra</th><th class="num">Pts</th><th class="num">Δ preço</th><th class="num">Ganho</th><th class="num">Total</th></tr>
+        <tr><td></td><td colspan="5" class="muted">Plantel atual</td><td></td><td class="num">${fmt(ex.base)}</td></tr>
+        ${ex.steps.map((t, i) => `<tr><td>${i + 1}</td><td>${posTag(t.out.pos)} ${esc(t.out.name)}<br><span class="muted">${info(t.out)}</span></td><td class="num">${fmt(t.out.pts)}</td>
+          <td><b>${esc(t.in.name)}</b><br><span class="muted">${info(t.in)}</span></td><td class="num">${fmt(t.in.pts)}</td>
+          <td class="num">${t.cost >= 0 ? '+' : ''}${fmt(t.cost)} M€</td><td class="num"><b>${sg(t.gain)}</b></td><td class="num">${fmt(t.ev)}</td></tr>`).join('')}
+      </table></div>
+      <p class="note">Total: <b>${sg(ex.ev - ex.base)}</b> pts esperados nesta jornada${hits ? ` (−${hits} pelas transferências a mais → ${sg(ex.ev - ex.base - hits)})` : ''} · ${ex.steps.length} troca${ex.steps.length === 1 ? '' : 's'}${money != null ? ` · saldo final ${m1(money)}` : ' · Limitless: sem orçamento'}.
+        "Pts" = pontos esperados do jogador nesta jornada; o ganho é a diferença no total do plantel (conta quem fica no banco e as trocas ao intervalo).
+        ${ex.steps.some(t => t.gain < -0.05) ? 'As trocas com ganho negativo servem para libertar dinheiro para as outras' + (b.mode === 'wc' ? ' ou rendem nas jornadas seguintes (o Wildcard é para várias jornadas)' : '') + '.' : ''}</p>`;
   }
   function builtHtml() {
     const { esc, fmt, posTag } = A(), b = U.built, mine = new Set(st().squad), inXI = new Set(b.pl.xi.map(p => p.id));
     return `<div class="card" style="background:var(--soft)"><div class="row" style="justify-content:space-between"><h2>Plantel sugerido: ${esc(b.label)} <span class="sub">${m1(b.cost)} · ${fmt(b.pl.ev)} pts esperados nesta jornada (com as trocas ao intervalo)</span></h2>
       <div class="row"><button class="btn primary" id="uUseBuilt">Usar este plantel</button><button class="btn" id="uCloseBuilt">Fechar</button></div></div>
-      ${b.moves ? `<p>${b.moves.length ? b.moves.map(m => `${esc(m.out.name)} → <b>${esc(m.in.name)}</b> (+${fmt(m.gain)}${m.hit ? ', −4' : ''})`).join(' · ') : 'Nenhuma transferência compensa.'}</p>` : ''}
+      ${changesHtml(b)}
       <div class="list">${b.squad.slice().sort((x, y) => 'GDMF'.indexOf(x.pos) - 'GDMF'.indexOf(y.pos) || y.pts - x.pts).map(p => `<div class="li">${posTag(p.pos)}<div class="grow"><b>${esc(p.name)}</b>${mine.has(p.id) ? ' <span class="good">✓ já tens</span>' : ''}<span>${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} · ${m1(p.price)}${inXI.has(p.id) ? '' : ' · banco'}</span></div><span class="pts ${p.id === b.pl.captain.id ? 'hi' : ''}">${fmt(p.pts)}${p.id === b.pl.captain.id ? ' ©' : ''}</span></div>`).join('')}</div>
       <p class="note">${b.mode === 'lim' ? 'Limitless: o plantel volta ao teu depois desta jornada.' : b.mode === 'wc' ? (planCache.get(seasonKey(squadP()))?.rows[0]?.md === U.data.meta.md ? 'Wildcard: plantel escolhido para as jornadas que faltam da fase de liga (plano da época).' : 'Wildcard: escolhido só por esta jornada; calcula o plano da época para um plantel pensado para várias jornadas.') : 'Escolhido pelos pontos desta jornada.'}</p></div>`;
   }
