@@ -229,7 +229,7 @@ const UCLApp = (() => {
         <p class="note">O onze fica guardado sozinho até ao fecho, com o onze que o modelo escolheria. "Real" = pontos da UEFA: as tuas substituições entre dias contam no real; o esperado é o do onze no fecho. Em <b>Oficial</b> escreve o total da jornada.
         ${H.some(h => h.sim) ? '<br><sup>*</sup> simulado: modelo atual com os dados e as odds da véspera; o onze do modelo usa os mesmos 15 jogadores, só com substituições automáticas.' : ''}</p>
         <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th><th class="num">Oficial</th></tr>
-        ${rows.map(({ h, real, altReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}</td>
+        ${rows.map(({ h, real, altReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}${h.expFinal != null ? `<br><span class="muted" title="esperado do onze no fim da jornada, depois das tuas substituições">final ${fmt(h.expFinal)}</span>` : ''}</td>
           <td class="num">${real != null ? `<span class="pts hi">${real}</span>` : `<span class="tag q">${Date.now() < h.close ? 'por jogar' : 'atualiza a UEFA'}</span>`}</td>
           <td class="num">${tag(real != null ? real - h.exp : null)}</td><td class="num">${h.alt ? fmt(h.alt.exp) + star(h) : '–'}</td><td class="num">${altReal ?? '–'}</td>
           <td class="num">${tag(real != null && altReal != null ? altReal - real : null)}</td>
