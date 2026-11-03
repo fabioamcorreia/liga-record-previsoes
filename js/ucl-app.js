@@ -6,10 +6,15 @@ const UCLApp = (() => {
   const POSN = { G: 'GR', D: 'DEF', M: 'MED', F: 'AV' };
   const SITE = 'https://gaming.uefa.com/en/uclfantasy/create-team';
   const U = { data: null, proj: null, byId: {}, compare: false };
+  // Plantel de 3-nov-2026 (depois da jornada 3): Raya, Lammens · Gabriel, Calafiori, Hakimi, Dimarco, N. Brown ·
+  // Vitinha, Yamal, Enzo Fernández, Gravenberch, Barcola · Kane, Ferran Torres, Mbeumo. Saldo estimado (100 − valor atual).
+  const SEED_SQUAD = [250171278, 250118908, 250131901, 250113392, 250088061, 250056189, 250190350, 250101444, 250176450, 250174838, 250113001, 250134138, 250016833, 250088320, 250137260];
   const st = () => {
     const { ls } = A();
-    return { squad: ls.get('ucl.squad', []), bank: ls.get('ucl.bank', 0), avail: ls.get('ucl.avail', {}), lineup: ls.get('ucl.lineup', null),
-      freeT: ls.get('ucl.freeT', 2), name: ls.get('ucl.name', '') };
+    return { squad: ls.get('ucl.squad', SEED_SQUAD), bank: ls.get('ucl.bank', 1.3), avail: ls.get('ucl.avail', {}), lineup: ls.get('ucl.lineup', null),
+      freeT: ls.get('ucl.freeT', 2), name: ls.get('ucl.name', ''),
+      // histórico: o guardado + as jornadas importadas (js/ucl-history-seed.js) que faltem
+      history: { ...(window.UCL_HISTORY_SEED || {}), ...ls.get('ucl.history', {}) } };
   };
   const put = (k, v) => A().ls.set('ucl.' + k, v);
   const m1 = x => (x == null ? '–' : (+x).toFixed(1).replace('.', ',') + ' M€');
@@ -85,6 +90,7 @@ const UCLApp = (() => {
     const r = lineupOf(sq); if (!r) { el.innerHTML = empty('Plantel incompleto para formar um onze válido.'); return; }
     const { L, best, custom } = r;
     const tot = total(L), bestTot = best.total, diff = tot - bestTot;
+    saveSnapshot(L, best, tot);
     const inXI = new Set(L.xi), xiP = L.xi.map(id => U.byId[id]);
     const cap = U.byId[L.captain];
     const riskCls = p => (p.pPlay < 0.4 ? 'out' : p.pPlay < 0.75 ? 'risk' : '');
@@ -156,6 +162,84 @@ const UCLApp = (() => {
     $('#uCapSel').onchange = e => { const nl = cur(); nl.captain = +e.target.value; commit(nl); };
     const rb = $('#uResetXI'); if (rb) rb.onclick = () => { put('lineup', null); renderOnze(); };
     $('#uCmpBtn').onclick = () => { U.compare = !U.compare; renderOnze(); };
+  }
+
+  // Guarda o onze como a aposta da jornada (até ao fecho), com o onze do modelo para comparar
+  function saveSnapshot(L, best, tot) {
+    const md = U.data.meta.md, close = deadlineMs(); if (!close || new Date(U.data.meta.created) >= close || Date.now() >= close) return;
+    const pl = id => { const p = U.byId[id]; return { id, n: p.name, t: p.team, pos: p.pos, pts: +p.pts.toFixed(2) }; };
+    const h = A().ls.get('ucl.history', {}), old = h[md];
+    const snap = { md, close, xi: L.xi.map(pl), bench: L.bench.map(pl), captain: L.captain, exp: +tot.toFixed(2),
+      alt: { formation: best.formation, xi: best.xi.map(p => p.id), captain: best.captain.id, exp: +best.total.toFixed(2) } };
+    if (old && JSON.stringify({ ...old, official: undefined }) === JSON.stringify(snap)) return;
+    h[md] = { ...snap, official: old?.official ?? null }; put('history', h);
+  }
+
+  // Pontos reais de uma jornada já jogada, pelo ficheiro da UEFA: onze guardado + substituições automáticas
+  // (as substituições manuais entre dias não se sabem → o "Oficial" é o que conta)
+  function realOf(md, xiIds, benchIds, captain) {
+    const rec = id => (U.data?.hist[id] || []).find(x => x.md === md);
+    if (!U.data || !xiIds.some(id => rec(id))) return null;
+    const pos = id => U.data.players.find(p => p.id === id)?.pos;
+    const xi = [...xiIds], used = new Set(), cnt = (a, k) => a.filter(id => pos(id) === k).length;
+    for (let i = 0; i < xi.length; i++) {
+      if ((rec(xi[i])?.min || 0) > 0) continue;
+      const s = benchIds.find(b => !used.has(b) && (rec(b)?.min || 0) > 0 && (pos(xi[i]) === 'G') === (pos(b) === 'G')
+        && (() => { const t = xi.map((x, k) => (k === i ? b : x)); return cnt(t, 'G') === 1 && cnt(t, 'D') >= 3 && cnt(t, 'M') >= 2 && cnt(t, 'F') >= 1; })());
+      if (s) { used.add(s); xi[i] = s; }
+    }
+    const pts = id => rec(id)?.pts ?? 0;
+    return xi.reduce((a, id) => a + pts(id), 0) + (xi.includes(captain) ? pts(captain) : 0);
+  }
+
+  function renderHistorico() {
+    const el = $('#historico'), { fmt, esc, posTag } = A();
+    const H = Object.values(st().history).sort((a, b) => b.md - a.md);
+    if (!H.length) { el.innerHTML = empty('Ainda sem jornadas guardadas. O teu onze fica guardado sozinho antes do fecho de cada jornada.'); return; }
+    const rows = H.map(h => {
+      const calc = h.real ?? realOf(h.md, h.xi.map(p => p.id), h.bench.map(p => p.id), h.captain);
+      const altReal = h.alt ? (h.alt.real ?? realOf(h.md, h.alt.xi, [], h.alt.captain)) : null;
+      return { h, real: h.official ?? calc, altReal };
+    });
+    const done = rows.filter(r => r.real != null), sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
+    const withAlt = done.filter(r => r.altReal != null);
+    const sg = d => (d > 0 ? '+' : '') + fmt(d, Number.isInteger(d) ? 0 : 1);
+    const tag = d => (d == null ? '–' : `<span class="tag ${d >= 0 ? 'ok' : 'no'}">${sg(d)}</span>`);
+    const star = h => (h.sim ? '<sup class="muted">*</sup>' : '');
+    const nameOf = id => { for (const h of H) for (const p of [...h.xi, ...h.bench]) if (p.id === id) return p.n; return U.byId[id]?.name || '#' + id; };
+    const detail = ({ h }) => {
+      const subs = (h.subs || []).map(([o, i]) => `${esc(nameOf(o))} → ${esc(nameOf(i))}`);
+      const a = h.alt, mine = new Set(h.xi.map(p => p.id));
+      const out = a ? h.xi.filter(p => !a.xi.includes(p.id)).map(p => esc(p.n)) : [], inn = a ? a.xi.filter(id => !mine.has(id)).map(id => esc(nameOf(id))) : [];
+      return `<table><tr><th>Pos.</th><th>Jogador (onze no fecho)</th><th class="num">Esperado</th><th class="num">Real</th></tr>
+        ${h.xi.slice().sort((x, y) => 'GDMF'.indexOf(x.pos) - 'GDMF'.indexOf(y.pos)).map(p => `<tr><td>${posTag(p.pos)}</td><td>${esc(p.n)}${p.id === h.captain ? ' <span class="tag ok">C ×2</span>' : ''} <span class="muted">${esc(p.t)}</span></td>
+          <td class="num">${fmt(p.pts * (p.id === h.captain ? 2 : 1))}</td><td class="num">${p.real == null ? '–' : p.real * (p.id === h.captain ? 2 : 1)}</td></tr>`).join('')}</table>
+        <p class="note">Banco: ${h.bench.map(p => `${esc(p.n)} (${p.real ?? '–'})`).join(' · ')}${subs.length ? `<br>Substituições durante a jornada: ${subs.join(' · ')}` : ''}</p>
+        ${a ? `<p class="note"><b>Onze do modelo</b> (${esc(a.formation)}, capitão ${esc(nameOf(a.captain))}): esperado ${fmt(a.exp)}${a.real != null ? `, real <b>${a.real}</b>` : ''}${a.autoSubs?.length ? ` (substituições automáticas: ${a.autoSubs.map(esc).join(', ')})` : ''}.
+          ${out.length ? `Mudava: sai ${out.join(', ')} · entra ${inn.join(', ')}.` : 'Os mesmos 11.'}</p>` : ''}`;
+    };
+    el.innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><div class="l">Os teus pontos</div><div class="v">${done.length ? sum(done, r => r.real) : '–'}</div><div class="s">${done.length} jornada${done.length === 1 ? '' : 's'}${done.length ? ' · ' + fmt(sum(done, r => r.real) / done.length) + ' por jornada' : ''}</div></div>
+        <div class="kpi"><div class="l">Esperado (onze no fecho)</div><div class="v">${done.length ? fmt(sum(done, r => r.h.exp)) : '–'}</div><div class="s">${done.length ? 'real − esperado: ' + sg(sum(done, r => r.real) - sum(done, r => r.h.exp)) : ''}</div></div>
+        <div class="kpi"><div class="l">Onze do modelo (real)</div><div class="v">${withAlt.length ? sum(withAlt, r => r.altReal) : '–'}</div><div class="s">${withAlt.length ? `vs. os teus ${sum(withAlt, r => r.real)}: ${sg(sum(withAlt, r => r.altReal) - sum(withAlt, r => r.real))}` : ''}</div></div>
+        <div class="kpi"><div class="l">Esperado do modelo</div><div class="v">${withAlt.length ? fmt(sum(withAlt, r => r.h.alt.exp)) : '–'}</div><div class="s">no papel, o onze do modelo</div></div>
+      </div>
+      <div class="card"><h2>Histórico da Champions</h2>
+        <p class="note">O onze fica guardado sozinho até ao fecho, com o onze que o modelo escolheria. "Real" = pontos da UEFA: as tuas substituições entre dias contam no real; o esperado é o do onze no fecho. Em <b>Oficial</b> escreve o total da jornada.
+        ${H.some(h => h.sim) ? '<br><sup>*</sup> simulado: modelo atual com os dados e as odds da véspera; o onze do modelo usa os mesmos 15 jogadores, só com substituições automáticas.' : ''}</p>
+        <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th><th class="num">Oficial</th></tr>
+        ${rows.map(({ h, real, altReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}</td>
+          <td class="num">${real != null ? `<span class="pts hi">${real}</span>` : `<span class="tag q">${Date.now() < h.close ? 'por jogar' : 'atualiza a UEFA'}</span>`}</td>
+          <td class="num">${tag(real != null ? real - h.exp : null)}</td><td class="num">${h.alt ? fmt(h.alt.exp) + star(h) : '–'}</td><td class="num">${altReal ?? '–'}</td>
+          <td class="num">${tag(real != null && altReal != null ? altReal - real : null)}</td>
+          <td class="num"><input class="uOff" data-md="${h.md}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`).join('')}
+        </table></div></div>
+      ${rows.map(r => `<details class="card"><summary><b>J${r.h.md}</b> · esperado ${fmt(r.h.exp)}${r.h.sim ? ' (simulado)' : ''}${r.real != null ? ` · real ${r.real}` : ''}${r.altReal != null ? ` · modelo ${r.altReal}` : ''}</summary>${detail(r)}</details>`).join('')}`;
+    el.querySelectorAll('.uOff').forEach(i => i.onchange = () => {
+      const h = A().ls.get('ucl.history', {}), md = +i.dataset.md;
+      h[md] = { ...(st().history[md]), official: i.value === '' ? null : Math.round(+i.value) }; put('history', h); renderHistorico();
+    });
   }
 
   // melhor onze possível da Champions, respeitando 100 M€ e 3 por clube (escolha gulosa por pontos/preço)
@@ -299,15 +383,15 @@ const UCLApp = (() => {
 
   function renderAll() {
     header();
-    renderOnze(); renderTrocas(); renderJogos(); renderRanking(); renderPlantel();
+    renderOnze(); renderTrocas(); renderJogos(); renderRanking(); renderPlantel(); renderHistorico();
   }
 
   // sincronização PC → telemóvel
-  const bundle = () => { const s = st(); return { data: U.data, squad: s.squad, bank: s.bank, avail: s.avail, lineup: s.lineup, freeT: s.freeT, name: s.name }; };
+  const bundle = () => { const s = st(); return { data: U.data, squad: s.squad, bank: s.bank, avail: s.avail, lineup: s.lineup, freeT: s.freeT, name: s.name, history: A().ls.get('ucl.history', {}) }; };
   async function applyBundle(b) {
     if (!b) return;
     if (b.data) { U.data = b.data; await A().idb.set('ucl', b.data); }
-    if (Array.isArray(b.squad) && b.squad.length) for (const k of ['squad', 'bank', 'avail', 'lineup', 'freeT', 'name']) if (b[k] !== undefined) put(k, b[k]);
+    if (Array.isArray(b.squad) && b.squad.length) for (const k of ['squad', 'bank', 'avail', 'lineup', 'freeT', 'name', 'history']) if (b[k] !== undefined) put(k, b[k]);
   }
 
   return { init, setData, recompute, renderAll, header, tick, bundle, applyBundle, SITE };

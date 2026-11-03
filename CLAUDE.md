@@ -56,6 +56,10 @@ Seletor **Liga Record | Champions** no topo da app (`localStorage lr.mode`). Reg
 - Estados da UEFA: pStatus I lesionado, S castigado, NIS fora da convocatória, D dúvida; "Unlikely to start next game" = provável suplente.
 - **Calibração (jornadas 1-3, 2175 exibições):** as regras reproduzem os pontos reais da UEFA em 96,6% dos casos. Os outros são guarda-redes: o ficheiro não traz as defesas, por isso os pontos de defesas deduzem-se do total. Esta época tem 4,09 golos por jogo (LG = 2,05 por equipa). Médias por 90' em `PRIOR` (js/ucl-model.js). Backtest J2-J3 sem odds: média prevista dos titulares ≈ real por posição; Spearman 0,53-0,62 em todos, ~0,12 só entre titulares (muita variância).
 
+### Estado da equipa da Champions ("Man. City da Temu", 3-nov-2026, antes da jornada 4)
+Raya, Lammens · Gabriel, Calafiori, Hakimi, Dimarco, N. Brown · Vitinha, Yamal, Enzo Fernández (Man City), Gravenberch, Barcola (Liverpool) · Kane, Ferran Torres (Paris), Mbeumo. Valor 98,7 M€, saldo estimado 1,3 M€. Wildcard e Limitless por usar. 2 transferências grátis.
+Recomendado para a J4: Dimarco → João Cancelo (Barcelona), Mbeumo → Tresoldi (Club Brugge); capitão Yamal (joga terça; trocar para um jogador de quarta se falhar).
+
 ## Estrutura
 
 ```
@@ -66,7 +70,9 @@ js/app.js                      interface (separadores: onze, transferências, jo
                                e calcula os pontos reais com o PDF (3 suplentes automáticos, capitão ×2, treinador)
                                — confirmado: bate certo com os pontos oficiais das rondas 1-4 (54, 27, 55, 65).
 js/ucl-model.js                modelo da Champions: odds → golos esperados, pontos por jogador, onze, transferências, plantel de raiz
-js/ucl-app.js                  interface do modo Champions (mesmos separadores; Histórico e Calibração só na Liga Record)
+js/ucl-app.js                  interface do modo Champions (mesmos separadores; Calibração só na Liga Record)
+js/ucl-history-seed.js         Champions J1-J3 (screenshots): onze no fecho, substituições, oficial 122/71/55; esperado simulado com
+                               odds da véspera. Teu 248 reais (esperado 161) · onze do modelo 230 (esperado 190).
 js/history-seed.js             onzes das jornadas 6-10 (screenshots) + simulação: J6-J9 com o modelo sobre dados reconstruídos
                                da véspera (rounds do Sofascore + odds/xG/ausências por jogo; validado: J10 reconstruída = ±0,1/jogador)
                                e `alt` = onze do modelo com os mesmos 15. J6-J10: teu onze 270 pts reais (esperado 261) · modelo 258.

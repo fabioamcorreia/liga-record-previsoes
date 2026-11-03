@@ -122,12 +122,13 @@ const UCLModel = (() => {
       const last = mds.slice(0, 3).map(md => byMd[md]?.min || 0);
       // probabilidade de jogar: últimos 3 jogos da equipa (o mais recente pesa mais)
       const w = [0.5, 0.3, 0.2].slice(0, last.length), ws = w.reduce((s, v) => s + v, 0) || 1;
-      let pPlay = last.length ? last.reduce((s, m, i) => s + (m > 0 ? w[i] : 0), 0) / ws : 0.5;
+      // sem jogos da equipa (1.ª jornada): o preço da Fantasy indica quem é titular
+      let pPlay = last.length ? last.reduce((s, m, i) => s + (m > 0 ? w[i] : 0), 0) / ws : clamp((p.price - 4) / 3, 0.25, 0.9);
       if (last.length && last[0] === 0) pPlay *= 0.7;
       pPlay = Math.min(pPlay, 0.92) * statusFactor(p); // backtest: titulares "certos" jogaram 81-89% das vezes
       if (avail[p.id] != null) pPlay = avail[p.id];
       const played = h.filter(x => x.min > 0), mins = played.reduce((s, x) => s + x.min, 0);
-      const minIfPlay = played.length ? played.reduce((s, x) => s + x.min, 0) / played.length : (p.pos === 'G' ? 90 : 55);
+      const minIfPlay = played.length ? played.reduce((s, x) => s + x.min, 0) / played.length : (p.pos === 'G' ? 90 : pPlay > 0.6 ? 80 : 55);
       const p60c = minIfPlay >= 80 ? 0.92 : minIfPlay >= 70 ? 0.8 : minIfPlay >= 60 ? 0.62 : minIfPlay >= 45 ? 0.35 : 0.08;
       const p60 = pPlay * p60c, expMin = pPlay * minIfPlay;
       const sum = k => played.reduce((s, x) => s + (x[k] || 0), 0);
