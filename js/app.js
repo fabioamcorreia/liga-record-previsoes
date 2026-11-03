@@ -306,6 +306,7 @@
           </div>
         </div>
       </div>
+      ${transferTipHtml()}
       ${compareHtml}
       <div class="card"><h2>Plantel completo <span class="sub">pontos esperados nesta jornada</span></h2>${playerTable(sq.sort((a, b) => 'GDMF'.indexOf(a.pos) - 'GDMF'.indexOf(b.pos) || b.pts - a.pts), { showPrice: true })}</div>`;
 
@@ -406,6 +407,17 @@
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'plantel-liga-record.json'; a.click();
     };
     $('#impF').onchange = async e => { const j = JSON.parse(await e.target.files[0].text()); Object.assign(S, { squad: j.squad, prices: j.prices || {}, saldo: j.saldo ?? 0, posOverride: j.posOverride || {}, availOverride: j.availOverride || {} }); save(); recompute(); };
+  }
+
+  // Resumo para "O meu onze": a transferência da jornada (1 por jornada, mesma posição, dentro do saldo)
+  function transferTipHtml() {
+    const list = LRModel.transfers(S.proj.players, S.squad || [], S.prices, +S.saldo || 0);
+    const ok = list.filter(t => t.affordable === true && t.gain > 0.05).slice(0, 3);
+    const unknown = list.filter(t => t.affordable == null && t.gain > (ok[0]?.gain ?? 0.05)).slice(0, 2);
+    const li = t => `<div class="li">${posTag(t.in.pos)}<div class="grow"><b>${esc(t.out.name)} → ${esc(t.in.name)}</b><span>${esc(t.in.team)} ${esc(t.in.opp)} · ${pct(t.in.pPlay)} joga · ${eur(t.sell) || '?'} → ${eur(t.buy) || '?'}${t.newSaldo != null ? ' · saldo fica ' + eur(t.newSaldo) : ''}</span></div><span class="pts ${t.affordable ? 'hi' : ''}">+${fmt(t.gain)}</span></div>`;
+    return `<div class="card"><h2>Antes do fecho: transferência da jornada <span class="sub">1 por jornada, mesma posição · saldo ${eur(+S.saldo || 0)} · ganho = pontos esperados a mais no onze (com capitão e treinador)</span></h2>
+      ${ok.length ? `<div class="list">${ok.map(li).join('')}</div><p class="note">Melhor: <b>${esc(ok[0].out.name)} → ${esc(ok[0].in.name)}</b>, +${fmt(ok[0].gain)} pts esperados nesta jornada.</p>` : '<p class="muted">Nenhuma transferência que caiba no saldo melhora o onze (ou faltam os preços de quem entra).</p>'}
+      ${unknown.length ? `<p class="note">Sem preço registado (escreve-o no separador <b>Transferências</b> para confirmar se cabe): ${unknown.map(t => `${esc(t.out.name)} → ${esc(t.in.name)} (+${fmt(t.gain)})`).join(' · ')}.</p>` : ''}</div>`;
   }
 
   function renderTrocas() {

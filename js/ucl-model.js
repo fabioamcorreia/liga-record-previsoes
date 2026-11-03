@@ -372,10 +372,10 @@ const UCLModel = (() => {
     return out.sort((a, b) => b.gain - a.gain);
   }
   // As melhores pelo onze esperado, reordenadas pela jornada simulada (com substituições entre dias)
-  function transfersPlan(all, squad, bank, maxPerClub = 3, top = 12) {
-    const n = 400, base = plan(squad, { n, iters: 3 })?.ev || 0;
+  function transfersPlan(all, squad, bank, maxPerClub = 3, top = 12, { n = 400, iters = 3 } = {}) {
+    const base = plan(squad, { n, iters })?.ev || 0;
     const seen = new Set(), list = transfers(all, squad, bank, maxPerClub).filter(t => { const k = t.out.id + '|' + t.in.id; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, top);
-    return list.map(t => ({ ...t, gainStatic: t.gain, gain: (plan(squad.map(p => (p.id === t.out.id ? t.in : p)), { n, iters: 3 })?.ev || 0) - base })).sort((a, b) => b.gain - a.gain);
+    return list.map(t => ({ ...t, gainStatic: t.gain, gain: (plan(squad.map(p => (p.id === t.out.id ? t.in : p)), { n, iters })?.ev || 0) - base })).sort((a, b) => b.gain - a.gain);
   }
 
   // Plantel de raiz (Wildcard/Limitless ou equipa nova): melhora troca a troca o onze ideal (+10% do banco)
@@ -405,7 +405,68 @@ const UCLModel = (() => {
     return { squad: sq, cost: sq.reduce((a, p) => a + p.price, 0), xi: bestXI(sq) };
   }
 
-  return { project, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
+  // Transferências da jornada uma a uma (a seguinte calculada depois da anterior), até maxT; as que passam das
+  // grátis custam −4 e só se fazem se o ganho na jornada simulada for maior do que isso.
+  function improveSquad(all, squad, bank, { maxT = 2, freeT = 2, hit = 4, maxPerClub = 3 } = {}) {
+    let sq = squad.slice(), money = bank; const moves = [];
+    for (let k = 0; k < maxT; k++) {
+      const t = transfersPlan(all, sq, money, maxPerClub, 6, { n: 250, iters: 2 })[0];
+      const cost = k >= freeT ? hit : 0;
+      if (!t || t.gain - cost <= 0.05) break;
+      moves.push({ ...t, hit: cost }); sq = sq.map(p => (p.id === t.out.id ? t.in : p)); money -= t.cost;
+    }
+    const hits = moves.reduce((s, m) => s + m.hit, 0);
+    return { squad: sq, moves, bank: money, hits, ev: plan(sq, { n: 400, iters: 3 }).ev - hits };
+  }
+
+  // Projeção de uma jornada futura da fase de liga (sem odds: força das equipas pelos preços)
+  const projectMd = (data, md, sofaUcl) => project({ ...data, meta: { ...data.meta, md } }, md === data.meta.md ? sofaUcl : null);
+  // jogadores com os pontos somados de várias jornadas (para escolher um plantel para um período)
+  function combine(projs) {
+    const by = {};
+    for (const pr of projs) for (const p of pr.players) { const c = by[p.id] ||= { ...p, pts: 0, pPlay: 0 }; c.pts += p.pts; c.pPlay = Math.max(c.pPlay, p.pPlay); }
+    return Object.values(by);
+  }
+
+  // Plano dos jokers até ao fim da fase de liga (jornada 8): por jornada, o que daria o Limitless (só nessa jornada,
+  // sem orçamento) e o Wildcard (plantel novo dessa jornada até à 8, com o orçamento atual) face a ficar com o plantel
+  // e usar as transferências grátis (2 por jornada, guloso pelo onze esperado).
+  function seasonPlan(data, sofaUcl, squadIds, bank, { lastMd = 8, maxPerClub = 3, onStep } = {}) {
+    const mds = data.fixtures.filter(f => f.md >= data.meta.md && f.md <= lastMd && f.matches.length).map(f => f.md).sort((a, b) => a - b);
+    const P = {}; for (const md of mds) { P[md] = projectMd(data, md, sofaUcl); P[md].byId = Object.fromEntries(P[md].players.map(p => [p.id, p])); }
+    const at = (ids, md) => ids.map(id => P[md].byId[id]).filter(Boolean);
+    const ev = (ids, md) => { const sq = at(ids, md); return sq.length === 15 ? plan(sq, { n: 300, iters: 2 }).ev : 0; };
+    const value = ids => at(ids, mds[0]).reduce((s, p) => s + p.price, 0);
+    // sem jokers: o plantel evolui com 2 transferências grátis por jornada (só as que ganham ≥ 0,5 no onze esperado)
+    const base = {}; let ids = squadIds.slice(), money = bank;
+    for (const md of mds) {
+      for (let k = 0; k < 2; k++) {
+        const t = transfers(P[md].players, at(ids, md), money, maxPerClub)[0];
+        if (!t || t.gain < 0.5) break;
+        ids = ids.map(id => (id === t.out.id ? t.in.id : id)); money -= t.cost;
+      }
+      base[md] = { ids: ids.slice(), ev: ev(ids, md), money };
+      onStep && onStep(`sem jokers: jornada ${md}`);
+    }
+    const rows = [];
+    for (const md of mds) {
+      const lim = buildSquad(P[md].players, 999, maxPerClub);
+      const limEv = ev(lim.squad.map(p => p.id), md);
+      // Wildcard: plantel para as jornadas md..8 (pesa mais a 1.ª), com o dinheiro todo do plantel atual
+      const win = mds.filter(m => m >= md);
+      const wc = buildSquad(combine(win.map((m, i) => ({ players: P[m].players.map(p => ({ ...p, pts: p.pts * (i === 0 ? 1.3 : 1) })) }))), value(base[md].ids) + base[md].money, maxPerClub);
+      const wcIds = wc.squad.map(p => p.id);
+      const wcGain = win.reduce((s, m) => s + ev(wcIds, m) - base[m].ev, 0);
+      rows.push({ md, deadline: Math.min(...P[md].players.map(p => p.ts)), base: base[md].ev, limitless: limEv, limGain: limEv - base[md].ev,
+        wcGain, wcSquad: wc.squad, limSquad: lim.squad, window: win.length, oneDay: new Set(P[md].players.map(p => dayKey(p.ts))).size < 2 });
+      onStep && onStep(`jokers: jornada ${md}`);
+    }
+    const bestL = rows.reduce((a, r) => (!a || r.limGain > a.limGain ? r : a), null);
+    const bestW = rows.reduce((a, r) => (!a || r.wcGain > a.wcGain ? r : a), null);
+    return { rows, bestL, bestW };
+  }
+
+  return { project, projectMd, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, improveSquad, seasonPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
     setFormW: w => { FORM_W = w; } };
 })();
 if (typeof module !== 'undefined') module.exports = UCLModel;

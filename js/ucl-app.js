@@ -12,7 +12,7 @@ const UCLApp = (() => {
   const st = () => {
     const { ls } = A();
     return { squad: ls.get('ucl.squad', SEED_SQUAD), bank: ls.get('ucl.bank', 1.3), avail: ls.get('ucl.avail', {}), lineup: ls.get('ucl.lineup', null),
-      freeT: ls.get('ucl.freeT', 2), name: ls.get('ucl.name', ''),
+      freeT: ls.get('ucl.freeT', 2), extraT: ls.get('ucl.extraT', 0), chips: ls.get('ucl.chips', { wc: null, lim: null }), name: ls.get('ucl.name', ''),
       // histórico: o guardado + as jornadas importadas (js/ucl-history-seed.js) que faltem
       history: { ...(window.UCL_HISTORY_SEED || {}), ...ls.get('ucl.history', {}) } };
   };
@@ -177,6 +177,7 @@ const UCLApp = (() => {
           </div>
         </div>
       </div>
+      ${onzeSuggestHtml(sq)}
       ${U.compare ? compareHtml(sq) : ''}
       <div class="card"><h2>Plantel completo <span class="sub">pontos esperados nesta jornada</span></h2>${table(sq.sort((a, b) => 'GDMF'.indexOf(a.pos) - 'GDMF'.indexOf(b.pos) || b.pts - a.pts))}</div>`;
     const commit = nl => { put('lineup', { ...nl, stamp: U.data.meta.created }); renderOnze(); };
@@ -388,12 +389,144 @@ const UCLApp = (() => {
     if (s.squad.filter(x => (U.byId[x]?.pos) === p.pos).length >= UCLModel.NEED[p.pos]) { A().notice(`Já tens ${UCLModel.NEED[p.pos]} ${POSN[p.pos]} no plantel: remove um primeiro.`, 'err'); return; }
     put('squad', [...s.squad, id]); recompute();
   }
+  // ---------- sugestões: plantel, jornada e jokers ----------
+  // Os cálculos levam segundos: correm depois de mostrar a página e só com o separador Plantel aberto
+  const busy = new Set();
+  function later(key, f, tab = '#plantel', rerender = () => renderPlantel()) {
+    if (planCache.has(key)) return planCache.get(key);
+    if ($(tab).classList.contains('on') && !busy.has(key)) {
+      busy.add(key);
+      setTimeout(() => { try { cached(key, f); } finally { busy.delete(key); } rerender(); }, 60);
+    }
+    return null;
+  }
+  const wait = txt => `<div class="card empty"><span class="ic">⏳</span>${txt}</div>`;
+  const sqValue = sq => sq.reduce((a, p) => a + p.price, 0);
+  const evOf = sq => UCLModel.plan(sq, { n: 400, iters: 3 }).ev;
+
+  // Opções da jornada: ficar, usar as transferências (grátis + as que aceitas a −4), Wildcard, Limitless
+  function suggestion(sq, tab, rerender) {
+    const s = st(), free = +s.freeT || 0, extra = +s.extraT || 0, bank = +s.bank || 0;
+    return later(`sug|${sqKey(sq)}|${bank}|${free}|${extra}`, () => {
+      const imp = UCLModel.improveSquad(U.proj.players, sq, bank, { maxT: free + extra, freeT: free });
+      const wc = UCLModel.buildSquad(U.proj.players, sqValue(sq) + bank, 3), lim = UCLModel.buildSquad(U.proj.players, 999, 3);
+      return { base: planOf(sq).ev, imp, wc: { ...wc, ev: evOf(wc.squad) }, lim: { ...lim, ev: evOf(lim.squad) } };
+    }, tab, rerender);
+  }
+  // Resumo para "O meu onze": o que fazer antes do fecho
+  function onzeSuggestHtml(sq) {
+    const { fmt, esc } = A(), s = st();
+    const g = suggestion(sq, '#onze', () => renderOnze());
+    if (!g) return `<div class="card"><h2>Antes do fecho: transferências e jokers</h2><p class="muted">⏳ A simular as transferências…</p></div>`;
+    const sp = planCache.get(seasonKey(sq)), mdNow = U.data.meta.md, chips = s.chips;
+    const tag = x => `<span class="pts ${x >= 0.05 ? 'hi' : ''}">${x >= 0 ? '+' : ''}${fmt(x)}</span>`;
+    const left = +s.bank - g.imp.moves.reduce((a, m) => a + m.cost, 0);
+    return `<div class="card"><h2>Antes do fecho: transferências e jokers <span class="sub">${s.freeT} grátis${+s.extraT ? ` + até ${s.extraT} a −4` : ''} · saldo ${m1(s.bank)} · máx. 3 por clube</span></h2>
+      <div class="list">
+        ${g.imp.moves.length ? g.imp.moves.map((m, i) => `<div class="li">${A().posTag(m.in.pos)}<div class="grow"><b>${i + 1}. ${esc(m.out.name)} → ${esc(m.in.name)}</b><span>${esc(m.in.team)} ${esc(m.in.opp)} · ${day(m.in.ts)} · ${m1(m.out.price)} → ${m1(m.in.price)}${m.hit ? ' · <span class="bad">custa −4</span>' : ' · grátis'}</span></div>${tag(m.gain - m.hit)}</div>`).join('')
+          : '<p class="muted">Nenhuma transferência compensa nesta jornada.</p>'}
+      </div>
+      <p class="note">Com ${g.imp.moves.length ? 'estas transferências' : 'o plantel atual'}: <b>${fmt(g.imp.ev)}</b> pts esperados (agora ${fmt(g.base)}, ${g.imp.ev - g.base >= 0 ? '+' : ''}${fmt(g.imp.ev - g.base)})${g.imp.moves.length ? ` · sobra ${m1(left)}` : ''}.
+        ${!chips.wc ? `Wildcard ${fmt(g.wc.ev)} (${g.wc.ev - g.imp.ev >= 0 ? '+' : ''}${fmt(g.wc.ev - g.imp.ev)} nesta jornada${sp ? `; plano da época: melhor na J${chipPick(sp, chips).w?.md}, +${fmt(sp.bestW.wcGain)} até à J8` : ''}).` : ''}
+        ${!chips.lim ? `Limitless ${fmt(g.lim.ev)} (${g.lim.ev - g.imp.ev >= 0 ? '+' : ''}${fmt(g.lim.ev - g.imp.ev)}${sp ? `; melhor na J${chipPick(sp, chips).l?.md}` : ''}).` : ''}
+        Detalhes e "Usar este plantel" no separador <b>Plantel</b>.</p>
+      ${sp && !chips.wc && sp.bestW.md === mdNow && sp.bestW.wcGain > 12 ? `<p>💡 <b>O plano da época recomenda usar o Wildcard nesta jornada.</b></p>` : ''}</div>`;
+  }
+  function suggestHtml(sq) {
+    const { fmt, esc } = A(), s = st();
+    if (sq.length < 15) return '';
+    const g = suggestion(sq);
+    const head = `<div class="row" style="justify-content:space-between"><h2>Sugestão da jornada ${U.data.meta.md} <span class="sub">pontos esperados com as trocas ao intervalo</span></h2>
+      <div class="row"><label>Transferências grátis <input type="number" min="0" max="5" step="1" class="small" id="uFree2" value="${s.freeT}"></label>
+      <label title="cada uma custa −4 pts; só se faz se ganhar mais do que isso">+ a −4 até <input type="number" min="0" max="5" step="1" class="small" id="uExtra" value="${s.extraT}"></label></div></div>`;
+    if (!g) return `<div class="card">${head}${wait('A simular as transferências, o Wildcard e o Limitless…')}</div>`;
+    const gain = x => `<span class="tag ${x >= 0.05 ? 'ok' : 'q'}">${x >= 0 ? '+' : ''}${fmt(x)}</span>`;
+    const moves = g.imp.moves.length ? g.imp.moves.map(m => `${esc(m.out.name)} → <b>${esc(m.in.name)}</b> (${esc(m.in.team)}, ${m1(m.in.price)}) ${gain(m.gain)}${m.hit ? ' <span class="bad">−4</span>' : ''}`).join('<br>') : 'nenhuma compensa';
+    const wcG = g.wc.ev - g.imp.ev, limG = g.lim.ev - g.imp.ev, chips = s.chips;
+    const sp = planCache.get(seasonKey(sq));
+    const pk = sp ? chipPick(sp, chips) : {};
+    const wcNow = pk.w && pk.w.md === U.data.meta.md && pk.w.wcGain > 12;
+    const limNow = pk.l && pk.l.md === U.data.meta.md && pk.l.limGain > 20;
+    const verdict = wcNow ? `<b>Usa o Wildcard nesta jornada</b>: o plano da época dá +${fmt(pk.w.wcGain)} pts até à jornada 8 face a ficar com o plantel.`
+      : limNow ? `<b>Esta é a melhor jornada para o Limitless</b> (+${fmt(pk.l.limGain)} pts).`
+      : g.imp.moves.length ? `<b>Faz ${g.imp.moves.length === 1 ? 'a transferência' : `as ${g.imp.moves.length} transferências`}</b> e guarda os jokers${sp ? '' : ' (calcula o plano da época, em baixo, para saber quando os usar)'}.`
+      : `Fica com o plantel e guarda os jokers${sp ? '' : ' (calcula o plano da época, em baixo)'}.`;
+    const row = (label, ev, extraTxt, mode, used) => `<tr><td><b>${label}</b>${used ? ' <span class="tag q">já usado</span>' : ''}</td><td class="num">${fmt(ev)}</td><td class="num">${gain(ev - g.base)}</td><td>${extraTxt}</td><td>${mode && !used ? `<button class="btn uSee" data-m="${mode}">Ver plantel</button>` : ''}</td></tr>`;
+    return `<div class="card">${head}
+      <div style="overflow-x:auto"><table><tr><th>Opção</th><th class="num">Esperado</th><th class="num">vs ficar</th><th>O que muda</th><th></th></tr>
+        ${row('Ficar com o plantel', g.base, '—', '')}
+        ${row(`Transferências (${s.freeT} grátis${+s.extraT ? ` + até ${s.extraT} a −4` : ''})`, g.imp.ev, moves + (g.imp.hits ? `<br><span class="muted">já desconta −${g.imp.hits}</span>` : ''), 'imp')}
+        ${row('Wildcard', g.wc.ev, `plantel novo com ${m1(sqValue(sq) + (+s.bank || 0))} (fica para as jornadas seguintes) · ${gain(wcG)} vs as transferências nesta jornada`, 'wc', chips.wc)}
+        ${row('Limitless', g.lim.ev, `só nesta jornada, sem orçamento · ${gain(limG)} vs as transferências`, 'lim', chips.lim)}
+      </table></div>
+      <p style="margin-top:10px">💡 ${verdict}</p>
+      <p class="note">O Wildcard paga-se ao longo de várias jornadas e o Limitless só numa: compara-os no plano da época. Jokers usados:
+        <label><input type="checkbox" id="uChipWc" ${chips.wc ? 'checked' : ''}> Wildcard</label> <label><input type="checkbox" id="uChipLim" ${chips.lim ? 'checked' : ''}> Limitless</label></p></div>`;
+  }
+
+  // Plano dos jokers até à jornada 8 (as jornadas futuras usam a força das equipas pelos preços, sem odds)
+  const seasonKey = sq => `season|${sqKey(sq)}|${st().bank}`;
+  // melhores jornadas para cada joker, sem os dois na mesma jornada (o Wildcard escolhe primeiro: rende em várias)
+  function chipPick(sp, chips) {
+    const w = chips.wc ? null : sp.bestW;
+    const rows = sp.rows.filter(r => !w || w.wcGain <= 12 || r.md !== w.md);
+    const l = chips.lim ? null : rows.reduce((a, r) => (!a || r.limGain > a.limGain ? r : a), null);
+    return { w, l };
+  }
+  function seasonHtml(sq) {
+    const { fmt, esc } = A(), s = st(), key = seasonKey(sq);
+    const sp = planCache.get(key) || (U.wantSeason ? later(key, () => UCLModel.seasonPlan(U.data, A().S.data?.ucl, sq.map(p => p.id), +s.bank || 0)) : null);
+    const ko = `<p class="note"><b>Depois da fase de liga</b>: transferências ilimitadas antes da J9 (play-off) e da J11 (oitavos), 5 grátis antes dos quartos, das meias e da final, e 2-3 nas 2.as mãos (J10, J12, J14, J16); máximo por clube 4 → 5 → 6 → 8.
+      Por isso o <b>Wildcard</b> rende sobretudo na fase de liga (só 2 grátis por jornada). O <b>Limitless</b> pode esperar por uma 2.ª mão das eliminatórias (poucas trocas grátis) ou pela final (até 8 por clube), se não houver uma jornada da fase de liga claramente melhor. Não se podem usar jokers nas J1, J9 e J11.</p>`;
+    if (!sp) return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Plano da época: quando usar os jokers</h2>
+      <button class="btn primary" id="uSeason" ${U.wantSeason ? 'disabled' : ''}>${U.wantSeason ? '⏳ A calcular… (10-20 s)' : 'Calcular plano'}</button></div>
+      <p class="note">Simula as jornadas que faltam da fase de liga com o teu plantel (com 2 transferências grátis por jornada), com o Wildcard em cada jornada e com o Limitless em cada jornada.</p>${ko}</div>`;
+    const chips = s.chips, mdNow = U.data.meta.md, pk = chipPick(sp, chips);
+    const recW = chips.wc ? 'Wildcard já usado.' : pk.w.wcGain > 12 ? `<b>Wildcard na jornada ${pk.w.md}</b>${pk.w.md === mdNow ? ' (já, nesta)' : ''}: +${fmt(pk.w.wcGain)} pts até à jornada 8.` : `Wildcard: nenhuma jornada da fase de liga ganha mais de 12 pts (máx. +${fmt(pk.w.wcGain)} na J${pk.w.md}); guarda-o para quando o plantel tiver muitos lesionados.`;
+    const recL = chips.lim ? 'Limitless já usado.' : `<b>Limitless</b>: na fase de liga, a melhor é a jornada ${pk.l.md} (+${fmt(pk.l.limGain)})${pk.w && pk.w.wcGain > 12 && sp.bestL.md === pk.w.md ? ` (a J${pk.w.md} fica para o Wildcard: não dá para usar os dois na mesma jornada)` : ''}. ${pk.l.limGain > 20 ? 'Ganho grande: vale a pena usá-lo aí.' : 'Ganho moderado: também pode ficar para as eliminatórias.'}
+      <br><span class="muted">O ganho do Limitless nas jornadas seguintes foi calculado sem o Wildcard; depois de o usares, recalcula.</span>`;
+    return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Plano da época: quando usar os jokers <span class="sub">fase de liga, jornadas ${sp.rows[0].md}-${sp.rows[sp.rows.length - 1].md}</span></h2>
+      <button class="btn" id="uSeasonRe">↻ Recalcular</button></div>
+      <div style="overflow-x:auto"><table><tr><th>Jornada</th><th>Fecho</th><th class="num">Sem jokers</th><th class="num">Limitless</th><th class="num">Ganho Limitless</th><th class="num">Ganho Wildcard <span class="muted">(até à J8)</span></th></tr>
+        ${sp.rows.map(r => `<tr><td><b>J${r.md}</b>${r.oneDay ? ' <span class="tag q" title="todos os jogos à mesma hora: sem trocas a meio">1 dia</span>' : ''}</td><td>${day(r.deadline)}</td><td class="num">${fmt(r.base)}</td><td class="num">${fmt(r.limitless)}</td>
+          <td class="num">${r.md === pk.l?.md ? `<b>+${fmt(r.limGain)}</b>` : '+' + fmt(r.limGain)}</td><td class="num">${r.md === pk.w?.md ? `<b>+${fmt(r.wcGain)}</b>` : '+' + fmt(r.wcGain)} <span class="muted">(${r.window} j.)</span></td></tr>`).join('')}</table></div>
+      <p style="margin-top:10px">💡 ${recW}<br>💡 ${recL}</p>
+      <p class="note">Jornadas futuras sem odds (força das equipas pelos preços) e com os lesionados de hoje: refaz o cálculo em cada jornada. Diferenças de poucos pontos são ruído.</p>${ko}</div>`;
+  }
+  function bindSuggest(sq) {
+    const s = $('#plantel');
+    const f2 = $('#uFree2'); if (f2) f2.onchange = e => { put('freeT', Math.max(0, +e.target.value || 0)); renderPlantel(); renderTrocas(); };
+    const ex = $('#uExtra'); if (ex) ex.onchange = e => { put('extraT', Math.max(0, +e.target.value || 0)); renderPlantel(); };
+    const cw = $('#uChipWc'); if (cw) cw.onchange = e => { put('chips', { ...st().chips, wc: e.target.checked ? U.data.meta.md : null }); renderPlantel(); };
+    const cl = $('#uChipLim'); if (cl) cl.onchange = e => { put('chips', { ...st().chips, lim: e.target.checked ? U.data.meta.md : null }); renderPlantel(); };
+    const b = $('#uSeason'); if (b) b.onclick = () => { U.wantSeason = true; renderPlantel(); };
+    const r = $('#uSeasonRe'); if (r) r.onclick = () => { planCache.delete(seasonKey(sq)); U.wantSeason = true; renderPlantel(); };
+    s.querySelectorAll('.uSee').forEach(x => x.onclick = () => buildFor(sq, x.dataset.m));
+  }
+  // "Sugerir plantel": com as transferências disponíveis, Wildcard, Limitless ou equipa nova
+  function buildFor(sq, mode) {
+    if (!mode) return;
+    const g = planCache.get(`sug|${sqKey(sq)}|${+st().bank || 0}|${+st().freeT || 0}|${+st().extraT || 0}`);
+    const label = { imp: 'com as tuas transferências', wc: 'Wildcard', lim: 'Limitless (só esta jornada)', new: 'equipa nova (100 M€)' }[mode];
+    $('#plantel').querySelector('.card').insertAdjacentHTML('afterend', wait(`A calcular o plantel: ${label}…`));
+    setTimeout(() => {
+      let squad, moves = null;
+      if (mode === 'imp') { const imp = g?.imp || UCLModel.improveSquad(U.proj.players, sq, +st().bank || 0, { maxT: (+st().freeT || 0) + (+st().extraT || 0), freeT: +st().freeT || 0 }); squad = imp.squad; moves = imp.moves; }
+      else if (mode === 'wc' && planCache.get(seasonKey(sq))?.rows[0]?.md === U.data.meta.md) squad = planCache.get(seasonKey(sq)).rows[0].wcSquad.map(p => U.byId[p.id] || p);
+      else if (mode === 'wc' && g) squad = g.wc.squad;
+      else if (mode === 'lim' && g) squad = g.lim.squad;
+      else squad = UCLModel.buildSquad(U.proj.players, mode === 'lim' ? 999 : mode === 'wc' ? sqValue(sq) + (+st().bank || 0) : 100, 3).squad;
+      U.built = { squad, cost: sqValue(squad), pl: UCLModel.plan(squad), moves, label, mode };
+      renderPlantel();
+    }, 60);
+  }
   function builtHtml() {
-    const { esc, fmt, posTag } = A(), b = U.built, mine = new Set(st().squad);
-    return `<div class="card" style="background:var(--soft)"><div class="row" style="justify-content:space-between"><h2>Plantel sugerido <span class="sub">${m1(b.cost)} · onze ${esc(b.xi.formation)} · ${fmt(b.xi.total)} pts esperados nesta jornada</span></h2>
+    const { esc, fmt, posTag } = A(), b = U.built, mine = new Set(st().squad), inXI = new Set(b.pl.xi.map(p => p.id));
+    return `<div class="card" style="background:var(--soft)"><div class="row" style="justify-content:space-between"><h2>Plantel sugerido: ${esc(b.label)} <span class="sub">${m1(b.cost)} · ${fmt(b.pl.ev)} pts esperados nesta jornada (com as trocas ao intervalo)</span></h2>
       <div class="row"><button class="btn primary" id="uUseBuilt">Usar este plantel</button><button class="btn" id="uCloseBuilt">Fechar</button></div></div>
-      <div class="list">${b.squad.slice().sort((x, y) => 'GDMF'.indexOf(x.pos) - 'GDMF'.indexOf(y.pos) || y.pts - x.pts).map(p => `<div class="li">${posTag(p.pos)}<div class="grow"><b>${esc(p.name)}</b>${mine.has(p.id) ? ' <span class="good">✓ já tens</span>' : ''}<span>${esc(p.team)} ${esc(p.opp)} · ${m1(p.price)}${b.xi.xi.some(q => q.id === p.id) ? '' : ' · banco'}</span></div><span class="pts ${p.id === b.xi.captain.id ? 'hi' : ''}">${fmt(p.pts)}${p.id === b.xi.captain.id ? ' ©' : ''}</span></div>`).join('')}</div>
-      <p class="note">Só olha para esta jornada. Para uma equipa de raiz pensa também nas jornadas seguintes.</p></div>`;
+      ${b.moves ? `<p>${b.moves.length ? b.moves.map(m => `${esc(m.out.name)} → <b>${esc(m.in.name)}</b> (+${fmt(m.gain)}${m.hit ? ', −4' : ''})`).join(' · ') : 'Nenhuma transferência compensa.'}</p>` : ''}
+      <div class="list">${b.squad.slice().sort((x, y) => 'GDMF'.indexOf(x.pos) - 'GDMF'.indexOf(y.pos) || y.pts - x.pts).map(p => `<div class="li">${posTag(p.pos)}<div class="grow"><b>${esc(p.name)}</b>${mine.has(p.id) ? ' <span class="good">✓ já tens</span>' : ''}<span>${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} · ${m1(p.price)}${inXI.has(p.id) ? '' : ' · banco'}</span></div><span class="pts ${p.id === b.pl.captain.id ? 'hi' : ''}">${fmt(p.pts)}${p.id === b.pl.captain.id ? ' ©' : ''}</span></div>`).join('')}</div>
+      <p class="note">${b.mode === 'lim' ? 'Limitless: o plantel volta ao teu depois desta jornada.' : b.mode === 'wc' ? (planCache.get(seasonKey(squadP()))?.rows[0]?.md === U.data.meta.md ? 'Wildcard: plantel escolhido para as jornadas que faltam da fase de liga (plano da época).' : 'Wildcard: escolhido só por esta jornada; calcula o plano da época para um plantel pensado para várias jornadas.') : 'Escolhido pelos pontos desta jornada.'}</p></div>`;
   }
   function renderPlantel() {
     const el = $('#plantel'), { esc, fmt, pct, posTag } = A();
@@ -414,16 +547,19 @@ const UCLApp = (() => {
       <div class="row" style="margin:8px 0 12px"><input type="text" id="uAddP" list="uAllP" placeholder="Adicionar jogador… (escreve o nome)" style="min-width:320px">
         <datalist id="uAllP">${opts}</datalist><button class="btn primary" id="uAddBtn">Adicionar</button>
         <span class="note">ou carrega em <b>+</b> no separador Ranking</span>
-        <button class="btn" id="uBuild" title="Os 15 que dão mais pontos esperados nesta jornada dentro do orçamento (equipa nova, Wildcard ou Limitless)">✨ Sugerir plantel</button></div>
+        <span class="grow"></span>
+        <label>Sugerir plantel <select id="uBuildMode"><option value="">escolhe…</option><option value="imp">com as minhas transferências</option><option value="wc">Wildcard (orçamento atual)</option><option value="lim">Limitless (sem orçamento)</option><option value="new">equipa nova (100 M€)</option></select></label></div>
       ${U.built ? builtHtml() : ''}
       <table><tr><th>Pos</th><th>Jogador</th><th>Jogo</th><th class="num">Pts esp.</th><th>Disponibilidade</th><th class="num">Preço</th><th></th></tr>
       ${sq.sort((a, b) => 'GDMF'.indexOf(a.pos) - 'GDMF'.indexOf(b.pos) || b.pts - a.pts).map(p => `<tr><td>${posTag(p.pos)}</td><td><b>${esc(p.name)}</b>${p.status ? ` <span class="warn">${esc(p.status)}</span>` : ''}</td>
         <td>${esc(p.team)} <span class="muted">${esc(p.opp)} · ${day(p.ts)}</span></td><td class="num">${fmt(p.pts)}</td>
         <td><select class="uAv" data-id="${p.id}">${[['', 'Automática (' + pct(p.pPlay) + ')'], ['1', 'Joga de certeza'], ['0.75', 'Provável'], ['0.5', 'Dúvida'], ['0.25', 'Pouco provável'], ['0', 'Não joga']].map(([v, l]) => `<option value="${v}" ${String(s.avail[p.id] ?? '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
         <td class="num">${m1(p.price)}</td><td><button class="x uRm" data-id="${p.id}" title="Remover">✕</button></td></tr>`).join('')}</table>
-      <p class="note">Preços e posições vêm da UEFA. Plantel: 2 GR, 5 DEF, 5 MED, 3 AV; 100 M€ na fase de liga (105 M€ depois); máximo 3 por clube.</p></div>`;
-    $('#uBuild').onclick = () => { const b = +prompt('Orçamento total (M€)? 100 na fase de liga, 105 depois. Para o Limitless escreve 999.', '100'); if (!b) return;
-      U.built = UCLModel.buildSquad(U.proj.players, b, 3); renderPlantel(); };
+      <p class="note">Preços e posições vêm da UEFA. Plantel: 2 GR, 5 DEF, 5 MED, 3 AV; 100 M€ na fase de liga (105 M€ depois); máximo 3 por clube.</p></div>
+      ${suggestHtml(sq)}
+      ${seasonHtml(sq)}`;
+    bindSuggest(sq);
+    $('#uBuildMode').onchange = e => buildFor(sq, e.target.value);
     const ub = $('#uUseBuilt'); if (ub) ub.onclick = () => { if (!confirm('Substituir o teu plantel por este?')) return; put('squad', U.built.squad.map(p => p.id)); put('lineup', null); U.built = null; recompute(); };
     const uc = $('#uCloseBuilt'); if (uc) uc.onclick = () => { U.built = null; renderPlantel(); };
     $('#uBank2').onchange = e => { put('bank', +e.target.value || 0); recompute(); };
@@ -439,12 +575,12 @@ const UCLApp = (() => {
   }
 
   // sincronização PC → telemóvel
-  const bundle = () => { const s = st(); return { data: U.data, squad: s.squad, bank: s.bank, avail: s.avail, lineup: s.lineup, freeT: s.freeT, name: s.name, history: A().ls.get('ucl.history', {}) }; };
+  const bundle = () => { const s = st(); return { data: U.data, squad: s.squad, bank: s.bank, avail: s.avail, lineup: s.lineup, freeT: s.freeT, extraT: s.extraT, chips: s.chips, name: s.name, history: A().ls.get('ucl.history', {}) }; };
   async function applyBundle(b) {
     if (!b) return;
     if (b.data) { U.data = b.data; await A().idb.set('ucl', b.data); }
-    if (Array.isArray(b.squad) && b.squad.length) for (const k of ['squad', 'bank', 'avail', 'lineup', 'freeT', 'name', 'history']) if (b[k] !== undefined) put(k, b[k]);
+    if (Array.isArray(b.squad) && b.squad.length) for (const k of ['squad', 'bank', 'avail', 'lineup', 'freeT', 'extraT', 'chips', 'name', 'history']) if (b[k] !== undefined) put(k, b[k]);
   }
 
-  return { init, setData, recompute, renderAll, renderTrocas, header, tick, bundle, applyBundle, SITE };
+  return { init, setData, recompute, renderAll, renderTrocas, renderPlantel, header, tick, bundle, applyBundle, SITE };
 })();
