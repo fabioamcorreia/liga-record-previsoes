@@ -66,6 +66,16 @@ Raya, Lammens · Gabriel, Calafiori, Hakimi, Dimarco, N. Brown · Vitinha, Yamal
 Recomendado para a J4 (plano com trocas ao intervalo, esperado 68 sem transferências → ~75): Dimarco → Dibango (LASK, 4 M€) ou Cancelo (Barcelona, 5 M€) + Mbeumo → Guirassy (Dortmund, quarta) ou Kane → Mbappé (quarta); todas as combinações a ±1 pt. Capitão Yamal (terça); se fizer pouco, braçadeira a Mbappé/Guirassy na quarta.
 Plano dos jokers (3-nov, `seasonPlan`, J5-J8 sem odds): Wildcard já na J4 dá +44 até à J8 (J5 +16, J6 +21, J7 +12); Limitless +23 na J4/J5, +12-15 nas J6-J8. Wildcard J4 → 87 esperados nesta jornada vs 75 com as 2 transferências.
 
+## Análise da jornada (IA + modelo)
+
+Quando o utilizador pede "analisa a jornada" (Liga Record ou Champions):
+1. Dados frescos: coletor no sofascore.com (e gaming.uefa.com na Champions), no browser integrado; plantel, preços e saldo em `data/sync.json`, confirmar com o screenshot mais recente se houver.
+2. Correr o modelo e pesquisar notícias de cada equipa e de cada jogador relevante (lesões, castigos, poupanças, onzes prováveis, treinador novo, marcadores de penáltis).
+3. Escrever `js/analise.js` (`window.ANALISE = { lr: {...}, ucl: {...} }`): `round` (jornada da Liga em `lr`, da Champions em `ucl`), `label`, `created`, `summary`, `recommendation[]`, `risks[]`, `adjust[]` (`{id, name, team, pPlay, reason, source, url}`), `sources[]`. Publicar (commit + push). Não mexer em `data/sync.json`.
+4. Recomendar: transferência, onze, capitão, banco, treinador e hora de fecho, com os números do modelo já com as correções.
+
+**Regras:** a IA só corrige a probabilidade de jogar (`adjust`) e dá contexto; os pontos vêm sempre do modelo. Cada correção tem de ter fonte com data; sem fonte não há correção. Rumor ≠ facto: usar valores intermédios e dizê-lo. As escolhas manuais do plantel ganham às da IA. O Histórico guarda `alt` (só modelo) e `altIA` (modelo + correções) para medir se a IA ajuda: ao fim de várias jornadas, rever e dizer os números com honestidade.
+
 ## Estrutura
 
 ```
@@ -77,6 +87,8 @@ js/app.js                      interface (separadores: onze, transferências, jo
                                — confirmado: bate certo com os pontos oficiais das rondas 1-4 (54, 27, 55, 65).
 js/ucl-model.js                modelo da Champions: odds → golos esperados, pontos por jogador, onze, transferências, plantel de raiz
 js/ucl-app.js                  interface do modo Champions (mesmos separadores; Calibração só na Liga Record)
+js/analise.js                  análise da jornada escrita pela IA (ver "Análise da jornada")
+js/analise-ui.js               cartão da análise no "O meu onze" e correções à probabilidade de jogar (botão para as desligar)
 js/ucl-history-seed.js         Champions J1-J3 (screenshots): onze no fecho, substituições, oficial 122/71/55; esperado simulado com
                                odds da véspera. Teu 248 reais (esperado 161) · onze do modelo 230 (esperado 190).
 js/history-seed.js             onzes das jornadas 6-10 (screenshots) + simulação: J6-J9 com o modelo sobre dados reconstruídos

@@ -29,7 +29,11 @@ const UCLApp = (() => {
   function recompute() {
     if (!U.data) { renderAll(); return; }
     const s = st();
-    U.proj = UCLModel.project(U.data, A().S.data?.ucl, { availOverride: s.avail });
+    // correções da análise da IA (js/analise.js); as escolhas manuais ganham. projBase = só o modelo, para comparar
+    const aiAvail = AnaliseUI.avail('ucl', U.data.meta.md);
+    U.projBase = Object.keys(aiAvail).length ? UCLModel.project(U.data, A().S.data?.ucl, { availOverride: s.avail }) : null;
+    U.baseById = U.projBase ? Object.fromEntries(U.projBase.players.map(p => [p.id, p])) : null;
+    U.proj = UCLModel.project(U.data, A().S.data?.ucl, { availOverride: { ...aiAvail, ...s.avail } });
     U.byId = Object.fromEntries(U.proj.players.map(p => [p.id, p]));
     renderAll();
   }
@@ -65,7 +69,7 @@ const UCLApp = (() => {
   // O onze recomendado vem da jornada simulada com as trocas entre dias (UCLModel.plan): ~1 s, guarda-se em cache
   const planCache = new Map();
   const cached = (key, f) => { if (!planCache.has(key)) { if (planCache.size > 40) planCache.clear(); planCache.set(key, f()); } return planCache.get(key); };
-  const sqKey = sq => U.data.meta.created + '|' + JSON.stringify(st().avail) + '|' + sq.map(p => p.id).sort().join(',');
+  const sqKey = sq => U.data.meta.created + '|' + JSON.stringify(st().avail) + '|' + (U.projBase ? 'ia' : '') + '|' + sq.map(p => p.id).sort().join(',');
   const planOf = sq => cached('plan|' + sqKey(sq), () => UCLModel.plan(sq));
   function lineupOf(sq) {
     const best = planOf(sq); if (!best) return null;
@@ -152,6 +156,7 @@ const UCLApp = (() => {
         <div class="kpi"><div class="l">Capitão</div><div class="v" style="font-size:19px">${esc(cap?.name || '–')}</div><div class="s">${cap ? esc(cap.team + ' ' + cap.opp) + ' · ' + day(cap.ts) + ' · ' + fmt(2 * cap.pts) + ' pts' : ''}</div></div>
         <div class="kpi"><div class="l">Plantel</div><div class="v">${m1(sq.reduce((s, p) => s + p.price, 0))}</div><div class="s">saldo ${m1(st().bank)} · ${st().freeT} transferência${st().freeT === 1 ? '' : 's'} grátis</div></div>
       </div>
+      ${AnaliseUI.card('ucl', U.data.meta.md, { base: id => U.baseById?.[id] || U.byId[id] })}
       <div class="grid2">
         <div class="card">
           <div class="pitch-head">
@@ -180,6 +185,7 @@ const UCLApp = (() => {
       ${onzeSuggestHtml(sq)}
       ${U.compare ? compareHtml(sq) : ''}
       <div class="card"><h2>Plantel completo <span class="sub">pontos esperados nesta jornada</span></h2>${table(sq.sort((a, b) => 'GDMF'.indexOf(a.pos) - 'GDMF'.indexOf(b.pos) || b.pts - a.pts))}</div>`;
+    AnaliseUI.bind(el, recompute);
     const commit = nl => { put('lineup', { ...nl, stamp: U.data.meta.created }); renderOnze(); };
     const cur = () => ({ ...L, xi: [...L.xi], bench: [...L.bench] });
     el.querySelectorAll('.slotSel').forEach(s => s.onchange = () => {
@@ -195,12 +201,15 @@ const UCLApp = (() => {
   }
 
   // Guarda o onze como a aposta da jornada (até ao fecho), com o onze do modelo para comparar
+  const altOf = P => ({ formation: P.formation, xi: P.xi.map(p => p.id), bench: P.bench.map(p => p.id), captain: P.captain.id, exp: +P.ev.toFixed(2) });
   function saveSnapshot(L, best, tot) {
     const md = U.data.meta.md, close = deadlineMs(); if (!close || new Date(U.data.meta.created) >= close || Date.now() >= close) return;
     const pl = id => { const p = U.byId[id]; return { id, n: p.name, t: p.team, pos: p.pos, pts: +p.pts.toFixed(2) }; };
     const h = A().ls.get('ucl.history', {}), old = h[md];
     const snap = { md, close, xi: L.xi.map(pl), bench: L.bench.map(pl), captain: L.captain, exp: +tot.toFixed(2),
-      alt: { formation: best.formation, xi: best.xi.map(p => p.id), captain: best.captain.id, exp: +best.ev.toFixed(2) } };
+      alt: altOf(best) };
+    // com a análise da IA: alt = plano só com o modelo, altIA = plano com as correções
+    if (U.baseById) { const sq = st().squad.map(id => U.baseById[id]).filter(Boolean); snap.alt = altOf(cached('planBase|' + sqKey(sq), () => UCLModel.plan(sq))); snap.altIA = altOf(best); }
     if (old && JSON.stringify({ ...old, official: undefined }) === JSON.stringify(snap)) return;
     h[md] = { ...snap, official: old?.official ?? null }; put('history', h);
   }
@@ -229,8 +238,10 @@ const UCLApp = (() => {
     const rows = H.map(h => {
       const calc = h.real ?? realOf(h.md, h.xi.map(p => p.id), h.bench.map(p => p.id), h.captain);
       const altReal = h.alt ? (h.alt.real ?? realOf(h.md, h.alt.xi, [], h.alt.captain)) : null;
-      return { h, real: h.official ?? calc, altReal };
+      const iaReal = h.altIA ? realOf(h.md, h.altIA.xi, h.altIA.bench || [], h.altIA.captain) : null;
+      return { h, real: h.official ?? calc, altReal, iaReal };
     });
+    const anyIA = rows.some(r => r.h.altIA);
     const done = rows.filter(r => r.real != null), sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
     const withAlt = done.filter(r => r.altReal != null);
     const sg = d => (d > 0 ? '+' : '') + fmt(d, Number.isInteger(d) ? 0 : 1);
@@ -258,11 +269,12 @@ const UCLApp = (() => {
       <div class="card"><h2>Histórico da Champions</h2>
         <p class="note">O onze fica guardado sozinho até ao fecho, com o onze que o modelo escolheria. "Real" = pontos da UEFA: o esperado é o do onze no fecho jogado com as trocas ao intervalo (as regras do plano). Em <b>Oficial</b> escreve o total da jornada.
         ${H.some(h => h.sim) ? '<br><sup>*</sup> simulado: modelo atual com os dados e as odds da véspera; o plano do modelo usa os mesmos 15 jogadores (onze inicial, trocas ao intervalo pelas regras do plano e capitão).' : ''}</p>
-        <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th><th class="num">Oficial</th></tr>
-        ${rows.map(({ h, real, altReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}${h.expFinal != null ? `<br><span class="muted" title="esperado do onze no fim da jornada, depois das tuas substituições">final ${fmt(h.expFinal)}</span>` : ''}</td>
+        <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th>${anyIA ? '<th class="num">Modelo + IA esp.</th><th class="num">Modelo + IA real</th><th class="num">IA − modelo</th>' : ''}<th class="num">Oficial</th></tr>
+        ${rows.map(({ h, real, altReal, iaReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}${h.expFinal != null ? `<br><span class="muted" title="esperado do onze no fim da jornada, depois das tuas substituições">final ${fmt(h.expFinal)}</span>` : ''}</td>
           <td class="num">${real != null ? `<span class="pts hi">${real}</span>` : `<span class="tag q">${Date.now() < h.close ? 'por jogar' : 'atualiza a UEFA'}</span>`}</td>
           <td class="num">${tag(real != null ? real - h.exp : null)}</td><td class="num">${h.alt ? fmt(h.alt.exp) + star(h) : '–'}</td><td class="num">${altReal ?? '–'}</td>
           <td class="num">${tag(real != null && altReal != null ? altReal - real : null)}</td>
+          ${anyIA ? `<td class="num">${h.altIA ? fmt(h.altIA.exp) : '–'}</td><td class="num">${iaReal ?? '–'}</td><td class="num">${tag(iaReal != null && altReal != null ? iaReal - altReal : null)}</td>` : ''}
           <td class="num"><input class="uOff" data-md="${h.md}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`).join('')}
         </table></div></div>
       ${rows.map(r => `<details class="card"><summary><b>J${r.h.md}</b> · esperado ${fmt(r.h.exp)}${r.h.sim ? ' (simulado)' : ''}${r.real != null ? ` · real ${r.real}` : ''}${r.altReal != null ? ` · modelo ${r.altReal}` : ''}</summary>${detail(r)}</details>`).join('')}`;

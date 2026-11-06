@@ -82,7 +82,11 @@
     if (!S.data) return;
     applySeed();
     S.cal = LRModel.calibrate(S.data, S.lr);
-    S.proj = LRModel.project(S.data, S.cal, { posOverride: S.posOverride, availOverride: S.availOverride });
+    // correções da análise da IA (js/analise.js); as escolhas manuais ganham. projBase = só o modelo, para comparar
+    const aiAvail = AnaliseUI.avail('lr', S.data.meta.nextRound);
+    S.projBase = Object.keys(aiAvail).length ? LRModel.project(S.data, S.cal, { posOverride: S.posOverride, availOverride: S.availOverride }) : null;
+    S.baseById = S.projBase ? Object.fromEntries(S.projBase.players.map(p => [p.id, p])) : null;
+    S.proj = LRModel.project(S.data, S.cal, { posOverride: S.posOverride, availOverride: { ...aiAvail, ...S.availOverride } });
     S.byId = Object.fromEntries(S.proj.players.map(p => [p.id, p]));
     renderHeader();
     renderAll();
@@ -274,6 +278,7 @@
         <div class="kpi"><div class="l">Capitão</div><div class="v" style="font-size:19px">${esc(capP?.name || '–')}</div><div class="s">${capP ? esc(capP.team + ' ' + capP.opp) + ' · ' + fmt(2 * capP.pts) + ' pts' : ''}</div></div>
         <div class="kpi"><div class="l">Treinador</div><div class="v" style="font-size:19px">${esc(cSel?.team || '–')}</div><div class="s">${cSel ? esc(cSel.opp) + ' · ' + fmt(cSel.pts) + ' pts · ' + pct(cSel.pw) + ' vitória' : ''}</div></div>
       </div>
+      ${AnaliseUI.card('lr', S.data.meta.nextRound, { base: id => S.baseById?.[id] || S.byId[id], effect: S.baseById ? { base: L.xi.reduce((t, id) => t + S.baseById[id].pts, 0) + S.baseById[L.captain].pts + tot.coach, ia: tot.total } : null })}
       <div class="grid2">
         <div class="card">
           <div class="pitch-head">
@@ -332,6 +337,7 @@
       nl.bench[i] = v; nl.bench = nl.bench.filter(x => x != null);
       commit(nl); });
     const rb = $('#resetXI'); if (rb) rb.onclick = () => { S.lineup = null; save(); renderOnze(); };
+    AnaliseUI.bind(el, recompute);
     $('#cmpBtn').onclick = () => { S.compare = !S.compare; renderOnze(); if (S.compare) $('#compareCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
   }
 
@@ -546,12 +552,13 @@
     if (new Date(S.data.meta.created) >= close) return;
     const old = S.history[j];
     if (old && Date.now() >= close) return;
-    const pl = id => { const p = S.byId[id]; return { id, n: p.name, t: p.team, pos: p.pos, pts: +p.pts.toFixed(2) }; };
     const coachOf = id => { const c = coachList.find(x => x.teamId === id); return c ? { teamId: c.teamId, t: c.team, pts: +c.pts.toFixed(2) } : null; };
-    const lineup = X => ({ formation: X.formation, xi: X.xi.map(pl), bench: X.bench.map(pl), captain: X.captain, coach: coachOf(X.coach),
-      exp: +lineupTotal(X, coachList).total.toFixed(2) });
-    // alt = onze que o modelo escolhe com o plantel todo (para comparar com o teu)
-    const snap = { j, close, ...lineup(L), alt: lineup(bestL) };
+    const lineup = (X, by = S.byId) => { const pl = id => { const p = by[id]; return { id, n: p.name, t: p.team, pos: p.pos, pts: +p.pts.toFixed(2) }; };
+      return { formation: X.formation, xi: X.xi.map(pl), bench: X.bench.map(pl), captain: X.captain, coach: coachOf(X.coach),
+        exp: +(X.xi.reduce((s, id) => s + by[id].pts, 0) + (by[X.captain]?.pts || 0) + (coachList.find(c => c.teamId === X.coach)?.pts || 0)).toFixed(2) }; };
+    // alt = onze que o modelo escolhe com o plantel todo (para comparar com o teu); com a análise da IA, altIA = o mesmo com as correções
+    const baseBest = S.baseById ? LRModel.bestXI(S.squad.map(id => S.baseById[id]).filter(Boolean)) : null;
+    const snap = { j, close, ...lineup(L), alt: baseBest ? lineup(lineupFromBest(baseBest, coachList), S.baseById) : lineup(bestL), ...(baseBest ? { altIA: lineup(bestL) } : {}) };
     if (old && JSON.stringify({ ...old, official: undefined, saved: undefined }) === JSON.stringify(snap)) return;
     S.history[j] = { ...snap, saved: new Date().toISOString(), official: old?.official ?? null }; save();
     renderHistorico();
@@ -583,7 +590,8 @@
     const el = $('#historico');
     const list = Object.values(S.history).sort((a, b) => b.j - a.j);
     if (!list.length) { el.innerHTML = `<div class="card empty"><span class="ic">📅</span>Ainda sem jornadas guardadas.<br>A app guarda sozinha o onze de <b>O meu onze</b> antes do fecho de cada jornada; quando chegar o PDF das pontuações, aparecem aqui os pontos reais.</div>`; return; }
-    const R = list.map(h => ({ h, re: S.data ? realPoints(h) : null, ra: S.data && h.alt ? realPoints({ ...h.alt, j: h.j }) : null }));
+    const R = list.map(h => ({ h, re: S.data ? realPoints(h) : null, ra: S.data && h.alt ? realPoints({ ...h.alt, j: h.j }) : null, ri: S.data && h.altIA ? realPoints({ ...h.altIA, j: h.j }) : null }));
+    const anyIA = R.some(x => x.h.altIA), withIA = R.filter(x => x.ri && x.ra);
     const done = R.filter(x => x.re), off = R.filter(x => x.h.official != null);
     const both = done.filter(x => x.h.exp != null), withAlt = done.filter(x => x.ra);
     const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
@@ -615,17 +623,19 @@
         <div class="kpi"><div class="l">Os teus pontos (reais)</div><div class="v">${done.length ? realT : '–'}</div><div class="s">${done.length ? `${fmt(realT / done.length)} por jornada · ${done.length} jornada${done.length > 1 ? 's' : ''}` : 'à espera do PDF'}</div></div>
         <div class="kpi"><div class="l">Esperado (o teu onze)</div><div class="v">${both.length ? fmt(expT) : '–'}</div><div class="s">${both.length ? `real − esperado: ${sg(realB - expT)}` : ''}</div></div>
         <div class="kpi"><div class="l">Onze do modelo (real)</div><div class="v">${withAlt.length ? altT : '–'}</div><div class="s">${withAlt.length ? `vs. os teus ${mineA}: ${sg(altT - mineA)}` : ''}</div></div>
+        ${anyIA ? `<div class="kpi"><div class="l">Modelo + IA (real)</div><div class="v">${withIA.length ? sum(withIA, x => x.ri.total) : '–'}</div><div class="s">${withIA.length ? `vs. só o modelo ${sum(withIA, x => x.ra.total)}: ${sg(sum(withIA, x => x.ri.total) - sum(withIA, x => x.ra.total))}` : 'à espera do PDF'}</div></div>` : ''}
         <div class="kpi"><div class="l">Oficial</div><div class="v">${off.length ? sum(off, x => x.h.official) : '–'}</div><div class="s">${off.length ? `${off.length} jornada${off.length > 1 ? 's' : ''} · confirma o cálculo` : 'escreve os pontos oficiais'}</div></div>
       </div>
       <div class="card"><h2>Histórico de jornadas</h2>
         <p class="note">O teu onze fica guardado sozinho até ao fecho de cada jornada, junto com o onze que o modelo escolheria. O real é calculado com o PDF das pontuações (suplentes automáticos, capitão ×2, treinador); em <b>Oficial</b> escreve os pontos que a Liga Record te deu.
         ${R.some(x => x.h.sim) ? '<br><sup>*</sup> simulado: o modelo atual com os dados reconstruídos tal como estavam na véspera da jornada (odds, xG, minutos, ausências; PDFs só até à jornada anterior). O onze do modelo usa os 15 jogadores do teu onze + banco.' : ''}</p>
-        <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th><th class="num">Oficial</th></tr>
-        ${R.map(({ h, re, ra }) => `<tr>
+        <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th>${anyIA ? '<th class="num">Modelo + IA esp.</th><th class="num">Modelo + IA real</th><th class="num">IA − modelo</th>' : ''}<th class="num">Oficial</th></tr>
+        ${R.map(({ h, re, ra, ri }) => `<tr>
           <td><b>J${h.j}</b> <span class="muted">${rnd(h.j)} · ${esc(h.formation)}</span></td><td class="num">${fmt(h.exp)}${star(h)}</td>
           <td class="num">${re ? `<span class="pts hi">${re.total}</span>` : `<span class="tag q">${status(h)}</span>`}</td>
           <td class="num">${dTag(re && h.exp != null ? re.total - h.exp : null)}</td>
           <td class="num">${h.alt ? fmt(h.alt.exp) + star(h) : '–'}</td><td class="num">${ra ? `<b>${ra.total}</b>` : '–'}</td><td class="num">${dTag(ra && re ? ra.total - re.total : null)}</td>
+          ${anyIA ? `<td class="num">${h.altIA ? fmt(h.altIA.exp) : '–'}</td><td class="num">${ri ? `<b>${ri.total}</b>` : '–'}</td><td class="num">${dTag(ri && ra ? ri.total - ra.total : null)}</td>` : ''}
           <td class="num"><input class="hOff" data-j="${h.j}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`).join('')}
         </table></div></div>
       ${R.map(x => `<details class="card"><summary><b>J${x.h.j}</b> · ${esc(x.h.formation)} · ${x.h.exp != null ? `esperado ${fmt(x.h.exp)}${x.h.sim ? ' (simulado)' : ''}` : 'sem previsão'}${x.re ? ` · real ${x.re.total}${x.re.subs ? ` (${x.re.subs > 1 ? x.re.subs + ' suplentes entraram' : '1 suplente entrou'})` : ''}${x.h.official != null && x.re.total !== x.h.official ? ` · oficial ${x.h.official}` : ''}` : ''}</summary>${detail(x)}</details>`).join('')}`;
