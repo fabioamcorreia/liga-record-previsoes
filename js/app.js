@@ -596,7 +596,7 @@
     const leagueOf = h => h.league || window.LEAGUE_SEED?.lr?.[h.j] || null, showLg = ls.get('histLeague', false);
     const R = list.map(h => { const lg = leagueOf(h);
       return { h, lg, re: S.data ? realPoints(h) : null, ra: S.data && h.alt ? realPoints({ ...h.alt, j: h.j }) : null, ri: S.data && h.altIA ? realPoints({ ...h.altIA, j: h.j }) : null, rl: S.data && lg ? realPoints({ ...lg, j: h.j }) : null }; });
-    const anyIA = R.some(x => x.h.altIA), withIA = R.filter(x => x.ri && x.ra);
+    const anyIA = R.some(x => x.h.altIA), showIA = anyIA && ls.get('histIA', false), withIA = R.filter(x => x.ri && x.ra);
     const done = R.filter(x => x.re), off = R.filter(x => x.h.official != null);
     const both = done.filter(x => x.h.exp != null), withAlt = done.filter(x => x.ra);
     const sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
@@ -629,13 +629,14 @@
         <div class="kpi"><div class="l">Os teus pontos (reais)</div><div class="v">${done.length ? realT : '–'}</div><div class="s">${done.length ? `${fmt(realT / done.length)} por jornada · ${done.length} jornada${done.length > 1 ? 's' : ''}` : 'à espera do PDF'}</div></div>
         <div class="kpi"><div class="l">Esperado (o teu onze)</div><div class="v">${both.length ? fmt(expT) : '–'}</div><div class="s">${both.length ? `real − esperado: ${sg(realB - expT)}` : ''}</div></div>
         <div class="kpi"><div class="l">Onze do modelo (real)</div><div class="v">${withAlt.length ? altT : '–'}</div><div class="s">${withAlt.length ? `vs. os teus ${mineA}: ${sg(altT - mineA)}` : ''}</div></div>
-        ${anyIA ? `<div class="kpi"><div class="l">Modelo + IA (real)</div><div class="v">${withIA.length ? sum(withIA, x => x.ri.total) : '–'}</div><div class="s">${withIA.length ? `vs. só o modelo ${sum(withIA, x => x.ra.total)}: ${sg(sum(withIA, x => x.ri.total) - sum(withIA, x => x.ra.total))}` : 'à espera do PDF'}</div></div>` : ''}
+        ${showIA ? `<div class="kpi"><div class="l">Modelo + IA (real)</div><div class="v">${withIA.length ? sum(withIA, x => x.ri.total) : '–'}</div><div class="s">${withIA.length ? `vs. só o modelo ${sum(withIA, x => x.ra.total)}: ${sg(sum(withIA, x => x.ri.total) - sum(withIA, x => x.ra.total))}` : 'à espera do PDF'}</div></div>` : ''}
         <div class="kpi"><div class="l">Oficial</div><div class="v">${off.length ? sum(off, x => x.h.official) : '–'}</div><div class="s">${off.length ? `${off.length} jornada${off.length > 1 ? 's' : ''} · confirma o cálculo` : 'escreve os pontos oficiais'}</div></div>
       </div>
       <div class="card"><h2>Histórico de jornadas</h2>
         <p class="note">O teu onze fica guardado sozinho até ao fecho de cada jornada, junto com o onze que o modelo escolheria. O real é calculado com o PDF das pontuações (suplentes automáticos, capitão ×2, treinador); em <b>Oficial</b> escreve os pontos que a Liga Record te deu.
         ${R.some(x => x.h.sim) ? '<br><sup>*</sup> simulado: o modelo atual com os dados reconstruídos tal como estavam na véspera da jornada (odds, xG, minutos, ausências; PDFs só até à jornada anterior). O onze do modelo usa os 15 jogadores do teu onze + banco.' : ''}</p>
-        <p><label class="chip" style="cursor:pointer;padding:6px 12px"><input type="checkbox" id="hLeague" ${showLg ? 'checked' : ''}> Mostrar o melhor onze da liga (sem limite de orçamento)</label></p>
+        <p><label class="chip" style="cursor:pointer;padding:6px 12px"><input type="checkbox" id="hLeague" ${showLg ? 'checked' : ''}> Mostrar o melhor onze da liga (sem limite de orçamento)</label>
+          ${anyIA ? `<label class="chip" style="cursor:pointer;padding:6px 12px"><input type="checkbox" id="hIA" ${showIA ? 'checked' : ''}> Mostrar Modelo + IA</label>` : ''}</p>
         <div style="overflow-x:auto"><table><tr>${thI('Jornada', 'A jornada da Liga e a tática do teu onze. Clica no resumo da jornada, em baixo, para ver os jogadores.', '')}
           ${thI('Esperado', 'Pontos que o modelo previa para o teu onze, antes do fecho: onze, capitão a dobrar e treinador. Não conta substituições: um jogador em dúvida desconta pela probabilidade de não jogar.')}
           ${thI('Real', 'Pontos que o teu onze fez, calculados com o PDF: substituições automáticas (até 3, na mesma posição), capitão a dobrar e treinador.')}
@@ -643,7 +644,7 @@
           ${thI('Modelo esp.', 'Pontos esperados do melhor onze que o modelo escolhe do teu plantel. Até à J10 escolhe entre os 15 do teu onze e banco; a partir da J11, entre o plantel todo.')}
           ${thI('Modelo real', 'Pontos que o onze do modelo teria feito de verdade, com as mesmas regras do Real.')}
           ${thI('Modelo − teu', 'Modelo real menos Real. Verde: o modelo teria feito mais do que tu. Vermelho: fizeste mais do que o modelo.')}
-          ${anyIA ? thI('Modelo + IA esp.', 'Como o Modelo esp., mas com as correções da análise da IA à probabilidade de jogar.') + thI('Modelo + IA real', 'Pontos que o onze do modelo com as correções da IA teria feito de verdade.') + thI('IA − modelo', 'Modelo + IA real menos Modelo real. Verde: as correções da IA ajudaram. Vermelho: pioraram.') : ''}
+          ${showIA ? thI('Modelo + IA esp.', 'Como o Modelo esp., mas com as correções da análise da IA à probabilidade de jogar.') + thI('Modelo + IA real', 'Pontos que o onze do modelo com as correções da IA teria feito de verdade.') + thI('IA − modelo', 'Modelo + IA real menos Modelo real. Verde: as correções da IA ajudaram. Vermelho: pioraram.') : ''}
           ${showLg ? thI('Liga esp.', 'Pontos esperados do melhor onze que o modelo escolhe entre todos os jogadores da liga, sem limite de orçamento, com capitão e treinador. O asterisco indica uma simulação feita depois, com os dados da véspera.') + thI('Liga real', 'Pontos que esse onze da liga teria feito de verdade. É o melhor onze na previsão, não o melhor possível depois de saber os resultados.') : ''}
           ${thI('Oficial', 'Pontos que a Liga Record te atribuiu. Escreve-os aqui para confirmar o cálculo do Real.')}</tr>
         ${R.map(({ h, re, ra, ri, lg, rl }) => `<tr>
@@ -651,12 +652,13 @@
           <td class="num">${re ? `<span class="pts hi">${re.total}</span>` : `<span class="tag q">${status(h)}</span>`}</td>
           <td class="num">${dTag(re && h.exp != null ? re.total - h.exp : null)}</td>
           <td class="num">${h.alt ? fmt(h.alt.exp) + star(h) : '–'}</td><td class="num">${ra ? `<b>${ra.total}</b>` : '–'}</td><td class="num">${dTag(ra && re ? ra.total - re.total : null)}</td>
-          ${anyIA ? `<td class="num">${h.altIA ? fmt(h.altIA.exp) : '–'}</td><td class="num">${ri ? `<b>${ri.total}</b>` : '–'}</td><td class="num">${dTag(ri && ra ? ri.total - ra.total : null)}</td>` : ''}
+          ${showIA ? `<td class="num">${h.altIA ? fmt(h.altIA.exp) : '–'}</td><td class="num">${ri ? `<b>${ri.total}</b>` : '–'}</td><td class="num">${dTag(ri && ra ? ri.total - ra.total : null)}</td>` : ''}
           ${showLg ? `<td class="num">${lg ? fmt(lg.exp) + (h.league ? '' : '<sup class="muted">*</sup>') : '–'}</td><td class="num">${rl ? `<b>${rl.total}</b>` : '–'}</td>` : ''}
           <td class="num"><input class="hOff" data-j="${h.j}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`).join('')}
         </table></div></div>
       ${R.map(x => `<details class="card"><summary><b>J${x.h.j}</b> · ${esc(x.h.formation)} · ${x.h.exp != null ? `esperado ${fmt(x.h.exp)}${x.h.sim ? ' (simulado)' : ''}` : 'sem previsão'}${x.re ? ` · real ${x.re.total}${x.re.subs ? ` (${x.re.subs > 1 ? x.re.subs + ' suplentes entraram' : '1 suplente entrou'})` : ''}${x.h.official != null && x.re.total !== x.h.official ? ` · oficial ${x.h.official}` : ''}` : ''}</summary>${detail(x)}</details>`).join('')}`;
     $('#hLeague').onchange = e => { ls.set('histLeague', e.target.checked); renderHistorico(); };
+    const hIA = $('#hIA'); if (hIA) hIA.onchange = e => { ls.set('histIA', e.target.checked); renderHistorico(); };
     el.querySelectorAll('.hOff').forEach(i => i.onchange = () => { S.history[+i.dataset.j].official = i.value === '' ? null : Math.round(+i.value); save(); renderHistorico(); });
   }
 
