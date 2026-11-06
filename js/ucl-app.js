@@ -231,14 +231,34 @@ const UCLApp = (() => {
     return xi.reduce((a, id) => a + pts(id), 0) + (xi.includes(captain) ? pts(captain) : 0);
   }
 
+  // Pontos reais do plano do modelo numa jornada guardada, com as trocas ao intervalo e o capitão (como nas jornadas simuladas).
+  // As decisões usam os pontos esperados da fotografia; a probabilidade de jogar é reconstruída só com os jogos anteriores.
+  function planReal(h, alt) {
+    if (!U.data) return null;
+    const md = h.md, rec = id => (U.data.hist[id] || []).find(x => x.md === md);
+    if (!alt.xi.some(id => rec(id))) return null;
+    return cached(`planReal|${md}|${U.data.meta.created}|${alt.xi.join()}|${alt.captain}`, () => {
+      const hist = {}; for (const [id, l] of Object.entries(U.data.hist)) hist[id] = l.filter(x => x.md < md);
+      const players = U.data.players.map(p => ({ ...p, status: '', trained: '' }));
+      const by = Object.fromEntries(UCLModel.project({ meta: { ...U.data.meta, md }, fixtures: U.data.fixtures, players, hist }, null).players.map(p => [p.id, p]));
+      const snap = Object.fromEntries([...h.xi, ...h.bench].map(p => [p.id, p.pts]));
+      const ids = [...new Set([...alt.xi, ...(alt.bench || []), ...Object.keys(snap).map(Number)])];
+      if (ids.some(id => !by[id])) return realOf(md, alt.xi, alt.bench || [], alt.captain);
+      const sq = ids.map(id => ({ ...by[id], pts: snap[id] ?? by[id].pts }));
+      const rest = sq.filter(p => !alt.xi.includes(p.id));
+      const bench = alt.bench?.length ? alt.bench : [...rest.filter(p => p.pos === 'G'), ...rest.filter(p => p.pos !== 'G').sort((a, b) => b.pts - a.pts)].map(p => p.id);
+      return UCLModel.realize(sq, { xi: alt.xi, bench, captain: alt.captain }, rec);
+    });
+  }
+
   function renderHistorico() {
     const el = $('#historico'), { fmt, esc, posTag } = A();
     const H = Object.values(st().history).sort((a, b) => b.md - a.md);
     if (!H.length) { el.innerHTML = empty('Ainda sem jornadas guardadas. O teu onze fica guardado sozinho antes do fecho de cada jornada.'); return; }
     const rows = H.map(h => {
       const calc = h.real ?? realOf(h.md, h.xi.map(p => p.id), h.bench.map(p => p.id), h.captain);
-      const altReal = h.alt ? (h.alt.real ?? realOf(h.md, h.alt.xi, [], h.alt.captain)) : null;
-      const iaReal = h.altIA ? realOf(h.md, h.altIA.xi, h.altIA.bench || [], h.altIA.captain) : null;
+      const altReal = h.alt ? (h.alt.real ?? planReal(h, h.alt)) : null;
+      const iaReal = h.altIA ? planReal(h, h.altIA) : null;
       return { h, real: h.official ?? calc, altReal, iaReal };
     });
     const anyIA = rows.some(r => r.h.altIA);
