@@ -558,7 +558,10 @@
         exp: +(X.xi.reduce((s, id) => s + by[id].pts, 0) + (by[X.captain]?.pts || 0) + (coachList.find(c => c.teamId === X.coach)?.pts || 0)).toFixed(2) }; };
     // alt = onze que o modelo escolhe com o plantel todo (para comparar com o teu); com a análise da IA, altIA = o mesmo com as correções
     const baseBest = S.baseById ? LRModel.bestXI(S.squad.map(id => S.baseById[id]).filter(Boolean)) : null;
-    const snap = { j, close, ...lineup(L), alt: baseBest ? lineup(lineupFromBest(baseBest, coachList), S.baseById) : lineup(bestL), ...(baseBest ? { altIA: lineup(bestL) } : {}) };
+    // league = melhor onze que o modelo escolhe entre todos os jogadores da liga, sem limite de orçamento
+    const lgBest = LRModel.bestXI((S.projBase || S.proj).players.filter(p => !p.missing));
+    const snap = { j, close, ...lineup(L), alt: baseBest ? lineup(lineupFromBest(baseBest, coachList), S.baseById) : lineup(bestL), ...(baseBest ? { altIA: lineup(bestL) } : {}),
+      ...(lgBest ? { league: lineup(lineupFromBest(lgBest, coachList), S.baseById || S.byId) } : {}) };
     if (old && JSON.stringify({ ...old, official: undefined, saved: undefined }) === JSON.stringify(snap)) return;
     S.history[j] = { ...snap, saved: new Date().toISOString(), official: old?.official ?? null }; save();
     renderHistorico();
@@ -590,7 +593,9 @@
     const el = $('#historico');
     const list = Object.values(S.history).sort((a, b) => b.j - a.j);
     if (!list.length) { el.innerHTML = `<div class="card empty"><span class="ic">📅</span>Ainda sem jornadas guardadas.<br>A app guarda sozinha o onze de <b>O meu onze</b> antes do fecho de cada jornada; quando chegar o PDF das pontuações, aparecem aqui os pontos reais.</div>`; return; }
-    const R = list.map(h => ({ h, re: S.data ? realPoints(h) : null, ra: S.data && h.alt ? realPoints({ ...h.alt, j: h.j }) : null, ri: S.data && h.altIA ? realPoints({ ...h.altIA, j: h.j }) : null }));
+    const leagueOf = h => h.league || window.LEAGUE_SEED?.lr?.[h.j] || null, showLg = ls.get('histLeague', false);
+    const R = list.map(h => { const lg = leagueOf(h);
+      return { h, lg, re: S.data ? realPoints(h) : null, ra: S.data && h.alt ? realPoints({ ...h.alt, j: h.j }) : null, ri: S.data && h.altIA ? realPoints({ ...h.altIA, j: h.j }) : null, rl: S.data && lg ? realPoints({ ...lg, j: h.j }) : null }; });
     const anyIA = R.some(x => x.h.altIA), withIA = R.filter(x => x.ri && x.ra);
     const done = R.filter(x => x.re), off = R.filter(x => x.h.official != null);
     const both = done.filter(x => x.h.exp != null), withAlt = done.filter(x => x.ra);
@@ -603,7 +608,7 @@
     const rnd = j => (j > LRModel.ROUND_OFFSET ? `ronda ${j - LRModel.ROUND_OFFSET}` : 'experimental');
     const status = h => (Date.now() < h.close ? 'por jogar' : 'à espera do PDF');
     const star = h => (h.sim ? '<sup class="muted">*</sup>' : '');
-    const detail = ({ h, re, ra }) => {
+    const detail = ({ h, re, ra, lg, rl }) => {
       const rows = re ? re.rows : h.xi.map(p => ({ ...p, cap: p.id === h.captain }));
       const note = r => (!re || r.played ? '' : r.sub ? `não jogou → entrou ${esc(r.sub.n)} (${r.sub.real})` : 'não jogou, sem suplente');
       const a = h.alt, mine = new Set(h.xi.map(p => p.id));
@@ -616,7 +621,8 @@
           <td class="num">${fmt(h.coach.pts)}</td><td class="num">${re ? `<b>${re.coach ?? '–'}</b>` : '–'}</td><td></td></tr>` : ''}
         </table><p class="note">Banco (por ordem): ${h.bench.map(b => `${esc(b.n)} (${POSN[b.pos]})`).join(' · ')}</p>
         ${a ? `<p class="note"><b>Onze do modelo</b> (${esc(a.formation)}, capitão ${esc(capA?.n || '–')}, treinador ${esc(a.coach?.t || '–')}): esperado ${fmt(a.exp)}${ra ? `, real <b>${ra.total}</b>` : ''}.
-          ${out.length || inn.length ? `Mudava: sai ${out.map(p => esc(p.n)).join(', ') || '—'} · entra ${inn.map(p => esc(p.n)).join(', ') || '—'}.` : 'Os mesmos 11.'}</p>` : ''}`;
+          ${out.length || inn.length ? `Mudava: sai ${out.map(p => esc(p.n)).join(', ') || '—'} · entra ${inn.map(p => esc(p.n)).join(', ') || '—'}.` : 'Os mesmos 11.'}</p>` : ''}
+        ${showLg && lg ? `<p class="note"><b>Melhor onze da liga</b> (${esc(lg.formation)}, capitão ${esc(lg.xi.find(p => p.id === lg.captain)?.n || '–')}, treinador ${esc(lg.coach?.t || '–')}): esperado ${fmt(lg.exp)}${rl ? `, real <b>${rl.total}</b>` : ''}. ${lg.xi.map(p => esc(p.n)).join(', ')}.</p>` : ''}`;
     };
     el.innerHTML = `
       <div class="kpis">
@@ -629,16 +635,28 @@
       <div class="card"><h2>Histórico de jornadas</h2>
         <p class="note">O teu onze fica guardado sozinho até ao fecho de cada jornada, junto com o onze que o modelo escolheria. O real é calculado com o PDF das pontuações (suplentes automáticos, capitão ×2, treinador); em <b>Oficial</b> escreve os pontos que a Liga Record te deu.
         ${R.some(x => x.h.sim) ? '<br><sup>*</sup> simulado: o modelo atual com os dados reconstruídos tal como estavam na véspera da jornada (odds, xG, minutos, ausências; PDFs só até à jornada anterior). O onze do modelo usa os 15 jogadores do teu onze + banco.' : ''}</p>
-        <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th>${anyIA ? '<th class="num">Modelo + IA esp.</th><th class="num">Modelo + IA real</th><th class="num">IA − modelo</th>' : ''}<th class="num">Oficial</th></tr>
-        ${R.map(({ h, re, ra, ri }) => `<tr>
+        <p><label class="chip" style="cursor:pointer;padding:6px 12px"><input type="checkbox" id="hLeague" ${showLg ? 'checked' : ''}> Mostrar o melhor onze da liga (sem limite de orçamento)</label></p>
+        <div style="overflow-x:auto"><table><tr>${thI('Jornada', 'A jornada da Liga e a tática do teu onze. Clica no resumo da jornada, em baixo, para ver os jogadores.', '')}
+          ${thI('Esperado', 'Pontos que o modelo previa para o teu onze, antes do fecho: onze, capitão a dobrar e treinador. Não conta substituições: um jogador em dúvida desconta pela probabilidade de não jogar.')}
+          ${thI('Real', 'Pontos que o teu onze fez, calculados com o PDF: substituições automáticas (até 3, na mesma posição), capitão a dobrar e treinador.')}
+          ${thI('Real − esp.', 'Real menos Esperado. Verde: fizeste mais do que o previsto. Vermelho: fizeste menos.')}
+          ${thI('Modelo esp.', 'Pontos esperados do melhor onze que o modelo escolhe do teu plantel. Até à J10 escolhe entre os 15 do teu onze e banco; a partir da J11, entre o plantel todo.')}
+          ${thI('Modelo real', 'Pontos que o onze do modelo teria feito de verdade, com as mesmas regras do Real.')}
+          ${thI('Modelo − teu', 'Modelo real menos Real. Verde: o modelo teria feito mais do que tu. Vermelho: fizeste mais do que o modelo.')}
+          ${anyIA ? thI('Modelo + IA esp.', 'Como o Modelo esp., mas com as correções da análise da IA à probabilidade de jogar.') + thI('Modelo + IA real', 'Pontos que o onze do modelo com as correções da IA teria feito de verdade.') + thI('IA − modelo', 'Modelo + IA real menos Modelo real. Verde: as correções da IA ajudaram. Vermelho: pioraram.') : ''}
+          ${showLg ? thI('Liga esp.', 'Pontos esperados do melhor onze que o modelo escolhe entre todos os jogadores da liga, sem limite de orçamento, com capitão e treinador. O asterisco indica uma simulação feita depois, com os dados da véspera.') + thI('Liga real', 'Pontos que esse onze da liga teria feito de verdade. É o melhor onze na previsão, não o melhor possível depois de saber os resultados.') : ''}
+          ${thI('Oficial', 'Pontos que a Liga Record te atribuiu. Escreve-os aqui para confirmar o cálculo do Real.')}</tr>
+        ${R.map(({ h, re, ra, ri, lg, rl }) => `<tr>
           <td><b>J${h.j}</b> <span class="muted">${rnd(h.j)} · ${esc(h.formation)}</span></td><td class="num">${fmt(h.exp)}${star(h)}</td>
           <td class="num">${re ? `<span class="pts hi">${re.total}</span>` : `<span class="tag q">${status(h)}</span>`}</td>
           <td class="num">${dTag(re && h.exp != null ? re.total - h.exp : null)}</td>
           <td class="num">${h.alt ? fmt(h.alt.exp) + star(h) : '–'}</td><td class="num">${ra ? `<b>${ra.total}</b>` : '–'}</td><td class="num">${dTag(ra && re ? ra.total - re.total : null)}</td>
           ${anyIA ? `<td class="num">${h.altIA ? fmt(h.altIA.exp) : '–'}</td><td class="num">${ri ? `<b>${ri.total}</b>` : '–'}</td><td class="num">${dTag(ri && ra ? ri.total - ra.total : null)}</td>` : ''}
+          ${showLg ? `<td class="num">${lg ? fmt(lg.exp) + (h.league ? '' : '<sup class="muted">*</sup>') : '–'}</td><td class="num">${rl ? `<b>${rl.total}</b>` : '–'}</td>` : ''}
           <td class="num"><input class="hOff" data-j="${h.j}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`).join('')}
         </table></div></div>
       ${R.map(x => `<details class="card"><summary><b>J${x.h.j}</b> · ${esc(x.h.formation)} · ${x.h.exp != null ? `esperado ${fmt(x.h.exp)}${x.h.sim ? ' (simulado)' : ''}` : 'sem previsão'}${x.re ? ` · real ${x.re.total}${x.re.subs ? ` (${x.re.subs > 1 ? x.re.subs + ' suplentes entraram' : '1 suplente entrou'})` : ''}${x.h.official != null && x.re.total !== x.h.official ? ` · oficial ${x.h.official}` : ''}` : ''}</summary>${detail(x)}</details>`).join('')}`;
+    $('#hLeague').onchange = e => { ls.set('histLeague', e.target.checked); renderHistorico(); };
     el.querySelectorAll('.hOff').forEach(i => i.onchange = () => { S.history[+i.dataset.j].official = i.value === '' ? null : Math.round(+i.value); save(); renderHistorico(); });
   }
 
@@ -675,7 +693,21 @@
   };
 
   // utilitários partilhados com o modo Champions (js/ucl-app.js)
-  window.LRApp = { S, ls, idb, fmt, pct, esc, eur, posTag, notice, ago };
+  // Título de coluna com (i): explicação ao passar o rato ou ao tocar. A caixa é fixa para não ser cortada pelas tabelas com scroll.
+  const thI = (label, tip, cls = 'num') => `<th class="${cls}">${label}<span class="info" tabindex="0" role="button" aria-label="${esc(tip)}" data-tip="${esc(tip)}">i</span></th>`;
+  const tipBox = document.createElement('div'); tipBox.id = 'tipBox'; tipBox.hidden = true; document.body.appendChild(tipBox);
+  const showTip = i => {
+    tipBox.textContent = i.dataset.tip; tipBox.hidden = false;
+    const r = i.getBoundingClientRect(), w = tipBox.offsetWidth, h = tipBox.offsetHeight;
+    tipBox.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + 'px';
+    tipBox.style.top = (r.bottom + h + 12 > innerHeight ? r.top - h - 6 : r.bottom + 6) + 'px';
+  };
+  const tipOf = e => e.target.closest?.('.info');
+  for (const ev of ['mouseover', 'focusin']) document.addEventListener(ev, e => { const i = tipOf(e); if (i) showTip(i); });
+  for (const ev of ['mouseout', 'focusout']) document.addEventListener(ev, e => { if (tipOf(e)) tipBox.hidden = true; });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') tipBox.hidden = true; });
+
+  window.LRApp = { S, ls, idb, fmt, pct, esc, eur, posTag, notice, ago, thI };
 
   // Marcador (bookmarklet) gerado a partir do próprio coletor
   if (typeof ligaRecordCollector === 'function') {

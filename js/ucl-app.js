@@ -210,6 +210,11 @@ const UCLApp = (() => {
       alt: altOf(best) };
     // com a análise da IA: alt = plano só com o modelo, altIA = plano com as correções
     if (U.baseById) { const sq = st().squad.map(id => U.baseById[id]).filter(Boolean); snap.alt = altOf(cached('planBase|' + sqKey(sq), () => UCLModel.plan(sq))); snap.altIA = altOf(best); }
+    // league = melhor plantel que o modelo escolhe sem limite de orçamento (como no Limitless), jogado com as mesmas regras
+    snap.league = cached(`league|${U.data.meta.created}|${JSON.stringify(st().avail)}`, () => {
+      const P = UCLModel.plan(UCLModel.buildSquad((U.projBase || U.proj).players, 999, 3).squad);
+      return { ...altOf(P), pts: Object.fromEntries([...P.xi, ...P.bench].map(p => [p.id, +p.pts.toFixed(2)])) };
+    });
     if (old && JSON.stringify({ ...old, official: undefined }) === JSON.stringify(snap)) return;
     h[md] = { ...snap, official: old?.official ?? null }; put('history', h);
   }
@@ -241,7 +246,7 @@ const UCLApp = (() => {
       const hist = {}; for (const [id, l] of Object.entries(U.data.hist)) hist[id] = l.filter(x => x.md < md);
       const players = U.data.players.map(p => ({ ...p, status: '', trained: '' }));
       const by = Object.fromEntries(UCLModel.project({ meta: { ...U.data.meta, md }, fixtures: U.data.fixtures, players, hist }, null).players.map(p => [p.id, p]));
-      const snap = Object.fromEntries([...h.xi, ...h.bench].map(p => [p.id, p.pts]));
+      const snap = { ...Object.fromEntries([...h.xi, ...h.bench].map(p => [p.id, p.pts])), ...alt.pts };
       const ids = [...new Set([...alt.xi, ...(alt.bench || []), ...Object.keys(snap).map(Number)])];
       if (ids.some(id => !by[id])) return realOf(md, alt.xi, alt.bench || [], alt.captain);
       const sq = ids.map(id => ({ ...by[id], pts: snap[id] ?? by[id].pts }));
@@ -259,16 +264,18 @@ const UCLApp = (() => {
       const calc = h.real ?? realOf(h.md, h.xi.map(p => p.id), h.bench.map(p => p.id), h.captain);
       const altReal = h.alt ? (h.alt.real ?? planReal(h, h.alt)) : null;
       const iaReal = h.altIA ? planReal(h, h.altIA) : null;
-      return { h, real: h.official ?? calc, altReal, iaReal };
+      const lg = h.league || window.LEAGUE_SEED?.ucl?.[h.md] || null, lgReal = lg ? (lg.real ?? planReal(h, lg)) : null;
+      return { h, real: h.official ?? calc, altReal, iaReal, lg, lgReal };
     });
+    const showLg = A().ls.get('histLeague', false), { thI } = A();
     const anyIA = rows.some(r => r.h.altIA);
     const done = rows.filter(r => r.real != null), sum = (a, f) => a.reduce((s, x) => s + f(x), 0);
     const withAlt = done.filter(r => r.altReal != null);
     const sg = d => (d > 0 ? '+' : '') + fmt(d, Number.isInteger(d) ? 0 : 1);
     const tag = d => (d == null ? '–' : `<span class="tag ${d >= 0 ? 'ok' : 'no'}">${sg(d)}</span>`);
     const star = h => (h.sim ? '<sup class="muted">*</sup>' : '');
-    const nameOf = id => { for (const h of H) for (const p of [...h.xi, ...h.bench]) if (p.id === id) return p.n; return U.byId[id]?.name || '#' + id; };
-    const detail = ({ h }) => {
+    const nameOf = id => { for (const h of H) for (const p of [...h.xi, ...h.bench]) if (p.id === id) return p.n; return U.byId[id]?.name || U.data?.players.find(p => p.id === id)?.name || '#' + id; };
+    const detail = ({ h, lg, lgReal }) => {
       const subs = (h.subs || []).map(([o, i]) => `${esc(nameOf(o))} → ${esc(nameOf(i))}`);
       const a = h.alt, mine = new Set(h.xi.map(p => p.id));
       const out = a ? h.xi.filter(p => !a.xi.includes(p.id)).map(p => esc(p.n)) : [], inn = a ? a.xi.filter(id => !mine.has(id)).map(id => esc(nameOf(id))) : [];
@@ -277,7 +284,8 @@ const UCLApp = (() => {
           <td class="num">${fmt(p.pts * (p.id === h.captain ? 2 : 1))}</td><td class="num">${p.real == null ? '–' : p.real * (p.id === h.captain ? 2 : 1)}</td></tr>`).join('')}</table>
         <p class="note">Banco: ${h.bench.map(p => `${esc(p.n)} (${p.real ?? '–'})`).join(' · ')}${subs.length ? `<br>Substituições durante a jornada: ${subs.join(' · ')}` : ''}</p>
         ${a ? `<p class="note"><b>Plano do modelo</b> (começa em ${esc(a.formation)}, capitão ${esc(nameOf(a.captain))}): esperado ${fmt(a.exp)}${a.real != null ? `, real <b>${a.real}</b>` : ''}${a.autoSubs?.length ? ` (substituições automáticas: ${a.autoSubs.map(esc).join(', ')})` : ''}.
-          ${out.length ? `Mudava: sai ${out.join(', ')} · entra ${inn.join(', ')}.` : 'Os mesmos 11.'}</p>` : ''}`;
+          ${out.length ? `Mudava: sai ${out.join(', ')} · entra ${inn.join(', ')}.` : 'Os mesmos 11.'}</p>` : ''}
+        ${showLg && lg ? `<p class="note"><b>Melhor plantel sem orçamento</b> (começa em ${esc(lg.formation)}, capitão ${esc(nameOf(lg.captain))}): esperado ${fmt(lg.exp)}${lgReal != null ? `, real <b>${lgReal}</b>` : ''}. ${lg.xi.map(id => esc(nameOf(id))).join(', ')}.</p>` : ''}`;
     };
     el.innerHTML = `
       <div class="kpis">
@@ -289,15 +297,27 @@ const UCLApp = (() => {
       <div class="card"><h2>Histórico da Champions</h2>
         <p class="note">O onze fica guardado sozinho até ao fecho, com o onze que o modelo escolheria. "Real" = pontos da UEFA: o esperado é o do onze no fecho jogado com as trocas ao intervalo (as regras do plano). Em <b>Oficial</b> escreve o total da jornada.
         ${H.some(h => h.sim) ? '<br><sup>*</sup> simulado: modelo atual com os dados e as odds da véspera; o plano do modelo usa os mesmos 15 jogadores (onze inicial, trocas ao intervalo pelas regras do plano e capitão).' : ''}</p>
-        <div style="overflow-x:auto"><table><tr><th>Jornada</th><th class="num">Esperado</th><th class="num">Real</th><th class="num">Real − esp.</th><th class="num">Modelo esp.</th><th class="num">Modelo real</th><th class="num">Modelo − teu</th>${anyIA ? '<th class="num">Modelo + IA esp.</th><th class="num">Modelo + IA real</th><th class="num">IA − modelo</th>' : ''}<th class="num">Oficial</th></tr>
-        ${rows.map(({ h, real, altReal, iaReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}${h.expFinal != null ? `<br><span class="muted" title="esperado do onze no fim da jornada, depois das tuas substituições">final ${fmt(h.expFinal)}</span>` : ''}</td>
+        <p><label class="chip" style="cursor:pointer;padding:6px 12px"><input type="checkbox" id="uLeague" ${showLg ? 'checked' : ''}> Mostrar o melhor plantel sem limite de orçamento</label></p>
+        <div style="overflow-x:auto"><table><tr>${thI('Jornada', 'A jornada da Champions. Clica no resumo da jornada, em baixo, para ver os jogadores.', '')}
+          ${thI('Esperado', 'Pontos que o modelo previa para o teu onze no fecho, já com as trocas ao intervalo, as substituições automáticas e o capitão a dobrar, pelas regras do plano.')}
+          ${thI('Real', 'Pontos que fizeste. Conta o Oficial, se o escreveste, com as tuas substituições. Sem Oficial, é o onze no fecho com as substituições automáticas.')}
+          ${thI('Real − esp.', 'Real menos Esperado. Verde: fizeste mais do que o previsto. Vermelho: fizeste menos.')}
+          ${thI('Modelo esp.', 'Pontos esperados do melhor onze que o modelo escolhe do teu plantel, com as trocas ao intervalo e o capitão.')}
+          ${thI('Modelo real', 'Pontos que o onze do modelo teria feito de verdade, decidindo as trocas e o capitão pelas regras do plano.')}
+          ${thI('Modelo − teu', 'Modelo real menos Real. Verde: o modelo teria feito mais do que tu. Vermelho: fizeste mais do que o modelo.')}
+          ${anyIA ? thI('Modelo + IA esp.', 'Como o Modelo esp., mas com as correções da análise da IA à probabilidade de jogar.') + thI('Modelo + IA real', 'Pontos que o plano com as correções da IA teria feito de verdade.') + thI('IA − modelo', 'Modelo + IA real menos Modelo real. Verde: as correções da IA ajudaram. Vermelho: pioraram.') : ''}
+          ${showLg ? thI('Liga esp.', 'Pontos esperados do melhor plantel de 15 que o modelo escolhe entre todos os jogadores, sem limite de orçamento e com máximo de 3 por clube, como no Limitless. O asterisco indica uma simulação feita depois, com os dados da véspera.') + thI('Liga real', 'Pontos que esse plantel teria feito de verdade, com as trocas ao intervalo. É o melhor na previsão, não o melhor possível depois de saber os resultados.') : ''}
+          ${thI('Oficial', 'Pontos que a UEFA te atribuiu. Escreve-os aqui: passam a contar como o teu Real.')}</tr>
+        ${rows.map(({ h, real, altReal, iaReal, lg, lgReal }) => `<tr><td><b>J${h.md}</b></td><td class="num">${fmt(h.exp)}${star(h)}${h.expFinal != null ? `<br><span class="muted" title="esperado do onze no fim da jornada, depois das tuas substituições">final ${fmt(h.expFinal)}</span>` : ''}</td>
           <td class="num">${real != null ? `<span class="pts hi">${real}</span>` : `<span class="tag q">${Date.now() < h.close ? 'por jogar' : 'atualiza a UEFA'}</span>`}</td>
           <td class="num">${tag(real != null ? real - h.exp : null)}</td><td class="num">${h.alt ? fmt(h.alt.exp) + star(h) : '–'}</td><td class="num">${altReal ?? '–'}</td>
           <td class="num">${tag(real != null && altReal != null ? altReal - real : null)}</td>
           ${anyIA ? `<td class="num">${h.altIA ? fmt(h.altIA.exp) : '–'}</td><td class="num">${iaReal ?? '–'}</td><td class="num">${tag(iaReal != null && altReal != null ? iaReal - altReal : null)}</td>` : ''}
+          ${showLg ? `<td class="num">${lg ? fmt(lg.exp) + (h.league ? '' : '<sup class="muted">*</sup>') : '–'}</td><td class="num">${lgReal ?? '–'}</td>` : ''}
           <td class="num"><input class="uOff" data-md="${h.md}" type="number" step="1" value="${h.official ?? ''}" placeholder="–" style="width:64px"></td></tr>`).join('')}
         </table></div></div>
       ${rows.map(r => `<details class="card"><summary><b>J${r.h.md}</b> · esperado ${fmt(r.h.exp)}${r.h.sim ? ' (simulado)' : ''}${r.real != null ? ` · real ${r.real}` : ''}${r.altReal != null ? ` · modelo ${r.altReal}` : ''}</summary>${detail(r)}</details>`).join('')}`;
+    $('#uLeague').onchange = e => { A().ls.set('histLeague', e.target.checked); renderHistorico(); };
     el.querySelectorAll('.uOff').forEach(i => i.onchange = () => {
       const h = A().ls.get('ucl.history', {}), md = +i.dataset.md;
       h[md] = { ...(st().history[md]), official: i.value === '' ? null : Math.round(+i.value) }; put('history', h); renderHistorico();

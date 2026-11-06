@@ -89,6 +89,7 @@ js/ucl-model.js                modelo da Champions: odds → golos esperados, po
 js/ucl-app.js                  interface do modo Champions (mesmos separadores; Calibração só na Liga Record)
 js/analise.js                  análise da jornada escrita pela IA (ver "Análise da jornada")
 js/analise-ui.js               cartão da análise no "O meu onze" e correções à probabilidade de jogar (botão para as desligar)
+js/history-league-seed.js      melhor onze da liga sem orçamento (esperado e real) nas jornadas anteriores a esta coluna existir; depois vem da fotografia (h.league)
 js/ucl-history-seed.js         Champions J1-J3 (screenshots): onze no fecho, substituições, oficial 122/71/55; esperado simulado com
                                odds da véspera. Teu 248 reais (esperado 161) · onze do modelo 230 (esperado 190).
 js/history-seed.js             onzes das jornadas 6-10 (screenshots) + simulação: J6-J9 com o modelo sobre dados reconstruídos
