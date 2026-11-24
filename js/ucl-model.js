@@ -170,11 +170,13 @@ const UCLModel = (() => {
       const w = [0.5, 0.3, 0.2].slice(0, last.length), ws = w.reduce((s, v) => s + v, 0) || 1;
       let pPlay = last.length ? last.reduce((s, m, i) => s + (m > 0 ? w[i] : 0), 0) / ws : PLAY[p.pos].find(([t]) => p.price >= t)[1];
       if (last.length && last[0] === 0) pPlay *= 0.7;
-      pPlay = Math.min(pPlay, 0.86) * statusFactor(p); // backtest J1-J3: quem jogou os últimos jogos todos jogou 83% das vezes
+      // máximo: quem jogou os jogos anteriores todos jogou o seguinte 84% das vezes (campo) e 89% (guarda-redes; J1-J4, 98 casos)
+      pPlay = Math.min(pPlay, p.pos === 'G' ? 0.89 : 0.86) * statusFactor(p);
       if (avail[p.id] != null) pPlay = avail[p.id];
       const played = h.filter(x => x.min > 0), mins = played.reduce((s, x) => s + x.min, 0);
       const minIfPlay = played.length ? played.reduce((s, x) => s + x.min, 0) / played.length : (p.pos === 'G' ? 90 : pPlay > 0.6 ? 80 : 55);
-      const p60c = minIfPlay >= 80 ? 0.92 : minIfPlay >= 70 ? 0.8 : minIfPlay >= 60 ? 0.62 : minIfPlay >= 45 ? 0.35 : 0.08;
+      // 60'+ se jogar: o guarda-redes titular quase nunca sai (88% de 89% nas J1-J4)
+      const p60c = minIfPlay >= 80 ? (p.pos === 'G' ? 0.99 : 0.92) : minIfPlay >= 70 ? 0.8 : minIfPlay >= 60 ? 0.62 : minIfPlay >= 45 ? 0.35 : 0.08;
       const p60 = pPlay * p60c, expMin = pPlay * minIfPlay;
       const sum = k => played.reduce((s, x) => s + (x[k] || 0), 0);
       const rate = (k, prior) => (sum(k) + K * prior) / (mins / 90 + K); // por 90'
