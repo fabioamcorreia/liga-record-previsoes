@@ -415,12 +415,20 @@
     $('#impF').onchange = async e => { const j = JSON.parse(await e.target.files[0].text()); Object.assign(S, { squad: j.squad, prices: j.prices || {}, saldo: j.saldo ?? 0, posOverride: j.posOverride || {}, availOverride: j.availOverride || {} }); save(); recompute(); };
   }
 
+  // Ausência de um jogador na próxima jornada, com a data prevista de regresso (Sofascore): avisa quando é curta,
+  // para não se vender por uma jornada quem volta logo a seguir
+  function absenceTag(p) {
+    const m = Object.values(S.data?.missing || {}).flat().find(x => x.id === p.id); if (!m) return '';
+    if (!m.until) return ` · <span class="bad">fora${m.reason ? ' (' + esc(m.reason) + ')' : ''}</span>`;
+    const days = (new Date(m.until) - Date.now()) / 864e5, d = m.until.split('-').reverse().slice(0, 2).join('/');
+    return ` · <span class="${days < 14 ? 'warn' : 'bad'}">fora até ${d}${days < 14 ? ': volta em breve, pensa se vale a pena vender' : ''}</span>`;
+  }
   // Resumo para "O meu onze": a transferência da jornada (1 por jornada, mesma posição, dentro do saldo)
   function transferTipHtml() {
     const list = LRModel.transfers(S.proj.players, S.squad || [], S.prices, +S.saldo || 0);
     const ok = list.filter(t => t.affordable === true && t.gain > 0.05).slice(0, 3);
     const unknown = list.filter(t => t.affordable == null && t.gain > (ok[0]?.gain ?? 0.05)).slice(0, 2);
-    const li = t => `<div class="li">${posTag(t.in.pos)}<div class="grow"><b>${esc(t.out.name)} → ${esc(t.in.name)}</b><span>${esc(t.in.team)} ${esc(t.in.opp)} · ${pct(t.in.pPlay)} joga · ${eur(t.sell) || '?'} → ${eur(t.buy) || '?'}${t.newSaldo != null ? ' · saldo fica ' + eur(t.newSaldo) : ''}</span></div><span class="pts ${t.affordable ? 'hi' : ''}">+${fmt(t.gain)}</span></div>`;
+    const li = t => `<div class="li">${posTag(t.in.pos)}<div class="grow"><b>${esc(t.out.name)} → ${esc(t.in.name)}</b><span>${esc(t.in.team)} ${esc(t.in.opp)} · ${pct(t.in.pPlay)} joga${absenceTag(t.out)} · ${eur(t.sell) || '?'} → ${eur(t.buy) || '?'}${t.newSaldo != null ? ' · saldo fica ' + eur(t.newSaldo) : ''}</span></div><span class="pts ${t.affordable ? 'hi' : ''}">+${fmt(t.gain)}</span></div>`;
     return `<div class="card"><h2>Antes do fecho: transferência da jornada <span class="sub">1 por jornada, mesma posição · saldo ${eur(+S.saldo || 0)} · ganho = pontos esperados a mais no onze (com capitão e treinador)</span></h2>
       ${ok.length ? `<div class="list">${ok.map(li).join('')}</div><p class="note">Melhor: <b>${esc(ok[0].out.name)} → ${esc(ok[0].in.name)}</b>, +${fmt(ok[0].gain)} pts esperados nesta jornada.</p>` : '<p class="muted">Nenhuma transferência que caiba no saldo melhora o onze (ou faltam os preços de quem entra).</p>'}
       ${unknown.length ? `<p class="note">Sem preço registado (escreve-o no separador <b>Transferências</b> para confirmar se cabe): ${unknown.map(t => `${esc(t.out.name)} → ${esc(t.in.name)} (+${fmt(t.gain)})`).join(' · ')}.</p>` : ''}</div>`;
@@ -435,7 +443,7 @@
     if (S.onlyAffordable) list = list.filter(t => t.affordable);
     const fit = t => (t.affordable == null ? '<span class="tag q">preço?</span>' : t.affordable ? '<span class="tag ok">cabe no saldo</span>' : '<span class="tag no">não cabe</span>');
     const card = t => `<div class="swap"><span class="gain" title="pontos esperados a mais nesta jornada">${t.gain > 0 ? '+' : ''}${fmt(t.gain)} pts</span>${posTag(t.out.pos)} <span class="note">ganho esperado</span>
-      <div class="who"><div><span>Sai</span><b>${esc(t.out.name)}</b><span>${esc(t.out.team)} · ${eur(t.sell) || '?'}</span></div><div class="arrow">→</div>
+      <div class="who"><div><span>Sai</span><b>${esc(t.out.name)}</b><span>${esc(t.out.team)} · ${eur(t.sell) || '?'}${absenceTag(t.out)}</span></div><div class="arrow">→</div>
         <div><span>Entra</span><b>${esc(t.in.name)}</b><span>${esc(t.in.team)} ${esc(t.in.opp)} · ${pct(t.in.pPlay)} joga</span></div></div>
       <div class="foot"><span>Preço <input type="number" step="0.05" class="small price" data-id="${t.in.id}" value="${S.prices[t.in.id] ?? ''}" placeholder="M€"></span>${fit(t)}</div></div>`;
     el.innerHTML = `

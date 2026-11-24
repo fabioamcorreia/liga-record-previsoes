@@ -407,10 +407,16 @@ const UCLModel = (() => {
     return out.sort((a, b) => b.gain - a.gain);
   }
   // As melhores pelo onze esperado, reordenadas pela jornada simulada (com substituições entre dias)
-  function transfersPlan(all, squad, bank, maxPerClub = 3, top = 12, { n = 400, iters = 3 } = {}) {
+  // ahead = jogadores das jornadas seguintes (aheadMaps): gainAhead = ganho no onze esperado dessas jornadas, para não vender
+  // quem falha só uma jornada nem comprar quem se vai lesionar; a ordem é pelo total (esta jornada + as seguintes)
+  function transfersPlan(all, squad, bank, maxPerClub = 3, top = 12, { n = 400, iters = 3, ahead = [] } = {}) {
     const base = plan(squad, { n, iters })?.ev || 0;
     const seen = new Set(), list = transfers(all, squad, bank, maxPerClub).filter(t => { const k = t.out.id + '|' + t.in.id; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, top);
-    return list.map(t => ({ ...t, gainStatic: t.gain, gain: (plan(squad.map(p => (p.id === t.out.id ? t.in : p)), { n, iters })?.ev || 0) - base })).sort((a, b) => b.gain - a.gain);
+    const xiAt = (by, sq) => bestXI(sq.map(p => by[p.id]).filter(Boolean))?.total || 0;
+    const aheadBase = ahead.map(a => xiAt(a.byId, squad));
+    const later = t => ahead.reduce((s, a, i) => s + xiAt(a.byId, squad.map(p => (p.id === t.out.id ? t.in : p))) - aheadBase[i], 0);
+    return list.map(t => ({ ...t, gainStatic: t.gain, gain: (plan(squad.map(p => (p.id === t.out.id ? t.in : p)), { n, iters })?.ev || 0) - base, gainAhead: ahead.length ? later(t) : 0 }))
+      .sort((a, b) => b.gain + b.gainAhead - a.gain - a.gainAhead);
   }
 
   // Plantel de raiz (Wildcard/Limitless ou equipa nova): melhora troca a troca o onze ideal (+10% do banco)
@@ -442,12 +448,12 @@ const UCLModel = (() => {
 
   // Transferências da jornada uma a uma (a seguinte calculada depois da anterior), até maxT; as que passam das
   // grátis custam −4 e só se fazem se o ganho na jornada simulada for maior do que isso.
-  function improveSquad(all, squad, bank, { maxT = 2, freeT = 2, hit = 4, maxPerClub = 3 } = {}) {
+  function improveSquad(all, squad, bank, { maxT = 2, freeT = 2, hit = 4, maxPerClub = 3, ahead = [] } = {}) {
     let sq = squad.slice(), money = bank; const moves = [];
     for (let k = 0; k < maxT; k++) {
-      const t = transfersPlan(all, sq, money, maxPerClub, 6, { n: 250, iters: 2 })[0];
+      const t = transfersPlan(all, sq, money, maxPerClub, 6, { n: 250, iters: 2, ahead })[0];
       const cost = k >= freeT ? hit : 0;
-      if (!t || t.gain - cost <= 0.05) break;
+      if (!t || t.gain + t.gainAhead - cost <= 0.05) break;
       moves.push({ ...t, hit: cost }); sq = sq.map(p => (p.id === t.out.id ? t.in : p)); money -= t.cost;
     }
     const hits = moves.reduce((s, m) => s + m.hit, 0);
@@ -475,6 +481,32 @@ const UCLModel = (() => {
   }
 
   // Projeção de uma jornada futura da fase de liga (sem odds: força das equipas pelos preços; o xG/xA conta na mesma)
+  // Lesões com data de regresso (Sofascore: ausências da próxima jornada, sofaUcl.missing = [nome, código, 'M'|'D', 'AAAA-MM-DD'|''])
+  // → fix(p, md): estado do jogador em cada jornada futura. Na jornada atual fica o estado da UEFA. Nas seguintes:
+  // fora até à data prevista (sem data, ex. ligamentos, fora até ao fim); sem informação do Sofascore, um lesionado da UEFA
+  // conta como fora só na jornada seguinte (visto a 24-nov: antes, a app dava-o como fora em todas as jornadas).
+  function injuryFix(data, sofaUcl) {
+    const ret = {}; for (const [n, , type, d] of sofaUcl?.missing || []) ret[norm(n)] = { type, d: d ? Date.parse(d) : null };
+    const mdTs = {}; for (const f of data.fixtures) { const t = f.matches.map(m => cetMs(m.dt)).filter(Boolean); if (t.length) mdTs[f.md] = Math.min(...t); }
+    const now = data.meta.md;
+    return (p, md) => {
+      if (md <= now) return p;
+      const r = ret[norm(p.name)];
+      if (r) { const out = r.d == null || r.d > mdTs[md]; return { ...p, status: out ? (r.type === 'D' ? 'D' : 'I') : '', trained: '' }; }
+      if (['I', 'NIS'].includes(p.status) && md === now + 1) return { ...p, trained: '' };
+      return { ...p, status: '', trained: '' };
+    };
+  }
+  // data prevista de regresso de um jogador (null se não está nas ausências; 'fim' se não há data)
+  function injuryInfo(sofaUcl, p) {
+    const r = (sofaUcl?.missing || []).find(([n]) => norm(n) === norm(p.name));
+    return r ? { type: r[2], until: r[3] || 'fim' } : null;
+  }
+  // jogadores das k jornadas seguintes (com as lesões por jornada), para as transferências olharem para a frente
+  function aheadMaps(data, sofaUcl, k = 2, lastMd = 8) {
+    const fix = injuryFix(data, sofaUcl), mds = data.fixtures.filter(f => f.md > data.meta.md && f.md <= lastMd && f.matches.length).map(f => f.md).sort((a, b) => a - b).slice(0, k);
+    return mds.map(md => ({ md, byId: Object.fromEntries(projectMd(data, md, sofaUcl, fix).players.map(p => [p.id, p])) }));
+  }
   // fix(p, md) → jogador com o estado dessa jornada (ex.: lesionado só até à data prevista de regresso)
   const projectMd = (data, md, sofaUcl, fix) => project({ ...data, players: fix ? data.players.map(p => fix(p, md)) : data.players, meta: { ...data.meta, md } }, md === data.meta.md ? sofaUcl : sofaUcl?.stats ? { stats: sofaUcl.stats } : null);
   // jogadores com os pontos somados de várias jornadas (para escolher um plantel para um período)
@@ -487,7 +519,7 @@ const UCLModel = (() => {
   // Plano dos jokers até ao fim da fase de liga (jornada 8): por jornada, o que daria o Limitless (só nessa jornada,
   // sem orçamento) e o Wildcard (plantel novo dessa jornada até à 8, com o orçamento atual) face a ficar com o plantel
   // e usar as transferências grátis (2 por jornada, guloso pelo onze esperado).
-  function seasonPlan(data, sofaUcl, squadIds, bank, { lastMd = 8, maxPerClub = 3, onStep, fix } = {}) {
+  function seasonPlan(data, sofaUcl, squadIds, bank, { lastMd = 8, maxPerClub = 3, onStep, fix = injuryFix(data, sofaUcl) } = {}) {
     const mds = data.fixtures.filter(f => f.md >= data.meta.md && f.md <= lastMd && f.matches.length).map(f => f.md).sort((a, b) => a - b);
     const P = {}; for (const md of mds) { P[md] = projectMd(data, md, sofaUcl, fix); P[md].byId = Object.fromEntries(P[md].players.map(p => [p.id, p])); }
     const at = (ids, md) => ids.map(id => P[md].byId[id]).filter(Boolean);
@@ -513,16 +545,26 @@ const UCLModel = (() => {
       const wc = buildSquad(combine(win.map((m, i) => ({ players: P[m].players.map(p => ({ ...p, pts: p.pts * (i === 0 ? 1.3 : 1) })) }))), value(base[md].ids) + base[md].money, maxPerClub);
       const wcIds = wc.squad.map(p => p.id);
       const wcGain = win.reduce((s, m) => s + ev(wcIds, m) - base[m].ev, 0);
+      // quem do teu plantel (o de hoje) não joga nesta jornada
+      const out = squadIds.map(id => P[md].byId[id]).filter(p => p && p.pPlay < 0.3).map(p => ({ name: p.name, status: p.status }));
       rows.push({ md, deadline: Math.min(...P[md].players.map(p => p.ts)), base: base[md].ev, limitless: limEv, limGain: limEv - base[md].ev,
-        wcGain, wcSquad: wc.squad, limSquad: lim.squad, window: win.length, oneDay: new Set(P[md].players.map(p => dayKey(p.ts))).size < 2 });
+        wcGain, wcSquad: wc.squad, limSquad: lim.squad, window: win.length, oneDay: new Set(P[md].players.map(p => dayKey(p.ts))).size < 2, out });
       onStep && onStep(`jokers: jornada ${md}`);
     }
     const bestL = rows.reduce((a, r) => (!a || r.limGain > a.limGain ? r : a), null);
     const bestW = rows.reduce((a, r) => (!a || r.wcGain > a.wcGain ? r : a), null);
-    return { rows, bestL, bestW };
+    // Combinações completas: os ganhos não se somam às cegas. Limitless antes do Wildcard: o Limitless volta atrás, por isso
+    // somam-se os dois (ambos face a ficar). Wildcard antes do Limitless: o Limitless passa a comparar com o plantel do Wildcard.
+    const R = Object.fromEntries(rows.map(r => [r.md, r]));
+    const limAfterWc = (w, l) => R[l].limitless - ev(R[w].wcSquad.map(p => p.id), l);
+    const combos = [{ wc: null, lim: null, gain: 0 }];
+    for (const r of rows) combos.push({ wc: r.md, lim: null, gain: r.wcGain }, { wc: null, lim: r.md, gain: r.limGain });
+    for (const w of rows) for (const l of rows) if (w.md !== l.md) combos.push({ wc: w.md, lim: l.md, gain: w.md < l.md ? w.wcGain + limAfterWc(w.md, l.md) : l.limGain + w.wcGain });
+    combos.sort((a, b) => b.gain - a.gain);
+    return { rows, bestL, bestW, combos };
   }
 
-  return { project, projectMd, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, improveSquad, explainChanges, seasonPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
+  return { project, projectMd, injuryFix, injuryInfo, aheadMaps, bestXI, plan, evalLineup, prep, realize, transfers, transfersPlan, improveSquad, explainChanges, seasonPlan, buildSquad, games, cetMs, basePts, STATUS, NEED, FORMATIONS, GOAL, norm,
     setFormW: w => { FORM_W = w; }, setXW: (g, a) => { XW = { g, a }; } };
 })();
 if (typeof module !== 'undefined') module.exports = UCLModel;

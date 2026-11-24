@@ -71,6 +71,13 @@ const UCLApp = (() => {
   const cached = (key, f) => { if (!planCache.has(key)) { if (planCache.size > 40) planCache.clear(); planCache.set(key, f()); } return planCache.get(key); };
   const sqKey = sq => U.data.meta.created + '|' + JSON.stringify(st().avail) + '|' + (U.projBase ? 'ia' : '') + '|' + sq.map(p => p.id).sort().join(',');
   const planOf = sq => cached('plan|' + sqKey(sq), () => UCLModel.plan(sq));
+  // jornadas seguintes (com as lesões por jornada) para as transferências; e quando volta um lesionado
+  const sofaU = () => A().S.data?.ucl;
+  const aheadOf = () => cached(`ahead|${U.data.meta.created}|${sofaU()?.created || ''}`, () => UCLModel.aheadMaps(U.data, sofaU(), 2));
+  const dmy = d => d.split('-').reverse().slice(0, 2).join('/');
+  const injTag = p => { const i = UCLModel.injuryInfo(sofaU(), p); if (!i) return '';
+    return ` · <span class="bad">${i.type === 'D' ? 'dúvida' : 'fora'}${i.until === 'fim' ? ' sem data de regresso' : ` até ${dmy(i.until)}`}</span>`; };
+  const aheadTxt = t => (t.gainAhead ? ` <span class="muted" title="ganho no onze esperado das 2 jornadas seguintes">· ${t.gainAhead >= 0 ? '+' : ''}${A().fmt(t.gainAhead)} nas 2 seguintes</span>` : '');
   function lineupOf(sq) {
     const best = planOf(sq); if (!best) return null;
     const s = st(), stamp = U.data.meta.created;
@@ -362,20 +369,20 @@ const UCLApp = (() => {
       el.innerHTML = '<div class="card empty"><span class="ic">⏳</span>A simular as transferências (com as trocas entre dias)…</div>';
       if (!el.classList.contains('on')) return; // só quando o separador está aberto
       setTimeout(() => { cached(key, () => {
-        const list = UCLModel.transfersPlan(U.proj.players, sq, +s.bank || 0);
+        const ahead = aheadOf(), list = UCLModel.transfersPlan(U.proj.players, sq, +s.bank || 0, 3, 12, { ahead });
         // melhor par de transferências (a 2.ª calculada depois da 1.ª)
         const one = list[0]; let pair = null;
-        if (one) { const two = UCLModel.transfersPlan(U.proj.players, sq.map(p => (p.id === one.out.id ? one.in : p)), (+s.bank || 0) - one.cost)[0]; if (two) pair = { a: one, b: two, gain: one.gain + two.gain }; }
+        if (one) { const two = UCLModel.transfersPlan(U.proj.players, sq.map(p => (p.id === one.out.id ? one.in : p)), (+s.bank || 0) - one.cost, 3, 12, { ahead })[0]; if (two) pair = { a: one, b: two, gain: one.gain + two.gain }; }
         return { list, pair };
       }); renderTrocas(); }, 50);
       return;
     }
     const { list, pair } = planCache.get(key);
-    const seen = new Set(), top = list.filter(t => { if (seen.has(t.out.id)) return false; seen.add(t.out.id); return t.gain > 0.05; }).slice(0, 8);
-    const card = t => `<div class="swap"><div class="li">${posTag(t.out.pos)}<div class="grow"><span class="muted">Sai</span><b>${esc(t.out.name)}</b><span>${esc(t.out.team)} ${esc(t.out.opp)} · ${fmt(t.out.pts)} pts · ${m1(t.out.price)}</span></div></div>
-      <div class="li">${posTag(t.in.pos)}<div class="grow"><span class="muted">Entra</span><b>${esc(t.in.name)}</b><span>${esc(t.in.team)} ${esc(t.in.opp)} · ${fmt(t.in.pts)} pts · ${m1(t.in.price)}</span></div><span class="pts hi">+${fmt(t.gain)}</span></div></div>`;
+    const seen = new Set(), top = list.filter(t => { if (seen.has(t.out.id)) return false; seen.add(t.out.id); return t.gain + t.gainAhead > 0.05; }).slice(0, 8);
+    const card = t => `<div class="swap"><div class="li">${posTag(t.out.pos)}<div class="grow"><span class="muted">Sai</span><b>${esc(t.out.name)}</b><span>${esc(t.out.team)} ${esc(t.out.opp)} · ${fmt(t.out.pts)} pts · ${m1(t.out.price)}${injTag(t.out)}</span></div></div>
+      <div class="li">${posTag(t.in.pos)}<div class="grow"><span class="muted">Entra</span><b>${esc(t.in.name)}</b><span>${esc(t.in.team)} ${esc(t.in.opp)} · ${fmt(t.in.pts)} pts · ${m1(t.in.price)}${injTag(t.in)}${aheadTxt(t)}</span></div><span class="pts hi">${t.gain >= 0 ? '+' : ''}${fmt(t.gain)}</span></div></div>`;
     el.innerHTML = `
-      <div class="card"><div class="row" style="justify-content:space-between"><h2>Transferências <span class="sub">ganho = pontos esperados a mais nesta jornada, já com as trocas ao intervalo</span></h2>
+      <div class="card"><div class="row" style="justify-content:space-between"><h2>Transferências <span class="sub">ganho = pontos esperados a mais nesta jornada, já com as trocas ao intervalo; ordenadas com as 2 jornadas seguintes (lesões com data de regresso)</span></h2>
         <div class="row"><label>Saldo <input type="number" step="0.1" class="small" id="uBank" value="${s.bank}"> M€</label>
         <label>Grátis <input type="number" step="1" min="0" max="5" class="small" id="uFree" value="${s.freeT}"></label></div></div>
         <p class="note">Fase de liga: 2 transferências grátis por jornada (só 1 passa para a seguinte); cada transferência a mais custa −4 pts. Máximo 3 jogadores por clube. Preço de venda = preço atual.</p>
@@ -462,7 +469,7 @@ const UCLApp = (() => {
   function suggestion(sq, tab, rerender) {
     const s = st(), free = +s.freeT || 0, extra = +s.extraT || 0, bank = +s.bank || 0;
     return later(`sug|${sqKey(sq)}|${bank}|${free}|${extra}`, () => {
-      const imp = UCLModel.improveSquad(U.proj.players, sq, bank, { maxT: free + extra, freeT: free });
+      const imp = UCLModel.improveSquad(U.proj.players, sq, bank, { maxT: free + extra, freeT: free, ahead: aheadOf() });
       const wc = UCLModel.buildSquad(U.proj.players, sqValue(sq) + bank, 3), lim = UCLModel.buildSquad(U.proj.players, 999, 3);
       return { base: planOf(sq).ev, imp, wc: { ...wc, ev: evOf(wc.squad) }, lim: { ...lim, ev: evOf(lim.squad) } };
     }, tab, rerender);
@@ -477,14 +484,14 @@ const UCLApp = (() => {
     const left = +s.bank - g.imp.moves.reduce((a, m) => a + m.cost, 0);
     return `<div class="card"><h2>Antes do fecho: transferências e jokers <span class="sub">${s.freeT} grátis${+s.extraT ? ` + até ${s.extraT} a −4` : ''} · saldo ${m1(s.bank)} · máx. 3 por clube</span></h2>
       <div class="list">
-        ${g.imp.moves.length ? g.imp.moves.map((m, i) => `<div class="li">${A().posTag(m.in.pos)}<div class="grow"><b>${i + 1}. ${esc(m.out.name)} → ${esc(m.in.name)}</b><span>${esc(m.in.team)} ${esc(m.in.opp)} · ${day(m.in.ts)} · ${m1(m.out.price)} → ${m1(m.in.price)}${m.hit ? ' · <span class="bad">custa −4</span>' : ' · grátis'}</span></div>${tag(m.gain - m.hit)}</div>`).join('')
+        ${g.imp.moves.length ? g.imp.moves.map((m, i) => `<div class="li">${A().posTag(m.in.pos)}<div class="grow"><b>${i + 1}. ${esc(m.out.name)} → ${esc(m.in.name)}</b><span>${esc(m.in.team)} ${esc(m.in.opp)} · ${day(m.in.ts)} · ${m1(m.out.price)} → ${m1(m.in.price)}${m.hit ? ' · <span class="bad">custa −4</span>' : ' · grátis'}${injTag(m.out)}${aheadTxt(m)}</span></div>${tag(m.gain - m.hit)}</div>`).join('')
           : '<p class="muted">Nenhuma transferência compensa nesta jornada.</p>'}
       </div>
       <p class="note">Com ${g.imp.moves.length ? 'estas transferências' : 'o plantel atual'}: <b>${fmt(g.imp.ev)}</b> pts esperados (agora ${fmt(g.base)}, ${g.imp.ev - g.base >= 0 ? '+' : ''}${fmt(g.imp.ev - g.base)})${g.imp.moves.length ? ` · sobra ${m1(left)}` : ''}.
-        ${!chips.wc ? `Wildcard ${fmt(g.wc.ev)} (${g.wc.ev - g.imp.ev >= 0 ? '+' : ''}${fmt(g.wc.ev - g.imp.ev)} nesta jornada${sp ? `; plano da época: melhor na J${chipPick(sp, chips).w?.md}, +${fmt(sp.bestW.wcGain)} até à J8` : ''}).` : ''}
-        ${!chips.lim ? `Limitless ${fmt(g.lim.ev)} (${g.lim.ev - g.imp.ev >= 0 ? '+' : ''}${fmt(g.lim.ev - g.imp.ev)}${sp ? `; melhor na J${chipPick(sp, chips).l?.md}` : ''}).` : ''}
+        ${!chips.wc ? `Wildcard ${fmt(g.wc.ev)} (${g.wc.ev - g.imp.ev >= 0 ? '+' : ''}${fmt(g.wc.ev - g.imp.ev)} nesta jornada).` : ''}
+        ${!chips.lim ? `Limitless ${fmt(g.lim.ev)} (${g.lim.ev - g.imp.ev >= 0 ? '+' : ''}${fmt(g.lim.ev - g.imp.ev)} nesta jornada).` : ''}
         Detalhes e "Usar este plantel" no separador <b>Plantel</b>.</p>
-      ${sp && !chips.wc && sp.bestW.md === mdNow && sp.bestW.wcGain > 12 ? `<p>💡 <b>O plano da época recomenda usar o Wildcard nesta jornada.</b></p>` : ''}</div>`;
+      ${sp ? `<p>💡 Plano da época: <b>${comboTxt(chipPick(sp, chips).combo)}</b>${chipPick(sp, chips).combo.gain > 0.05 ? ` (+${fmt(chipPick(sp, chips).combo.gain)} pts até à J8)` : ''}.</p>` : ''}</div>`;
   }
   function suggestHtml(sq) {
     const { fmt, esc } = A(), s = st();
@@ -495,14 +502,14 @@ const UCLApp = (() => {
       <label title="cada uma custa −4 pts; só se faz se ganhar mais do que isso">+ a −4 até <input type="number" min="0" max="5" step="1" class="small" id="uExtra" value="${s.extraT}"></label></div></div>`;
     if (!g) return `<div class="card">${head}${wait('A simular as transferências, o Wildcard e o Limitless…')}</div>`;
     const gain = x => `<span class="tag ${x >= 0.05 ? 'ok' : 'q'}">${x >= 0 ? '+' : ''}${fmt(x)}</span>`;
-    const moves = g.imp.moves.length ? g.imp.moves.map(m => `${esc(m.out.name)} → <b>${esc(m.in.name)}</b> (${esc(m.in.team)}, ${m1(m.in.price)}) ${gain(m.gain)}${m.hit ? ' <span class="bad">−4</span>' : ''}`).join('<br>') : 'nenhuma compensa';
+    const moves = g.imp.moves.length ? g.imp.moves.map(m => `${esc(m.out.name)} → <b>${esc(m.in.name)}</b> (${esc(m.in.team)}, ${m1(m.in.price)}) ${gain(m.gain)}${m.hit ? ' <span class="bad">−4</span>' : ''}${injTag(m.out)}${aheadTxt(m)}`).join('<br>') : 'nenhuma compensa';
     const wcG = g.wc.ev - g.imp.ev, limG = g.lim.ev - g.imp.ev, chips = s.chips;
     const sp = planCache.get(seasonKey(sq));
     const pk = sp ? chipPick(sp, chips) : {};
-    const wcNow = pk.w && pk.w.md === U.data.meta.md && pk.w.wcGain > 12;
-    const limNow = pk.l && pk.l.md === U.data.meta.md && pk.l.limGain > 20;
-    const verdict = wcNow ? `<b>Usa o Wildcard nesta jornada</b>: o plano da época dá +${fmt(pk.w.wcGain)} pts até à jornada 8 face a ficar com o plantel.`
-      : limNow ? `<b>Esta é a melhor jornada para o Limitless</b> (+${fmt(pk.l.limGain)} pts).`
+    const wcNow = pk.w && pk.w.md === U.data.meta.md && pk.combo.gain > 12;
+    const limNow = pk.l && pk.l.md === U.data.meta.md && pk.combo.gain > 12;
+    const verdict = wcNow ? `<b>Usa o Wildcard nesta jornada</b>: o plano da época (${comboTxt(pk.combo)}) dá +${fmt(pk.combo.gain)} pts até à jornada 8.`
+      : limNow ? `<b>Usa o Limitless nesta jornada</b>: o plano da época (${comboTxt(pk.combo)}) dá +${fmt(pk.combo.gain)} pts até à jornada 8.`
       : g.imp.moves.length ? `<b>Faz ${g.imp.moves.length === 1 ? 'a transferência' : `as ${g.imp.moves.length} transferências`}</b> e guarda os jokers${sp ? '' : ' (calcula o plano da época, em baixo, para saber quando os usar)'}.`
       : `Fica com o plantel e guarda os jokers${sp ? '' : ' (calcula o plano da época, em baixo)'}.`;
     const row = (label, ev, extraTxt, mode, used) => `<tr><td><b>${label}</b>${used ? ' <span class="tag q">já usado</span>' : ''}</td><td class="num">${fmt(ev)}</td><td class="num">${gain(ev - g.base)}</td><td>${extraTxt}</td><td>${mode && !used ? `<button class="btn uSee" data-m="${mode}">Ver plantel</button>` : ''}</td></tr>`;
@@ -520,13 +527,14 @@ const UCLApp = (() => {
 
   // Plano dos jokers até à jornada 8 (as jornadas futuras usam a força das equipas pelos preços, sem odds)
   const seasonKey = sq => `season|${sqKey(sq)}|${st().bank}`;
-  // melhores jornadas para cada joker, sem os dois na mesma jornada (o Wildcard escolhe primeiro: rende em várias)
+  // melhor combinação de jokers ainda possível (sp.combos já vem ordenada; ver seasonPlan)
   function chipPick(sp, chips) {
-    const w = chips.wc ? null : sp.bestW;
-    const rows = sp.rows.filter(r => !w || w.wcGain <= 12 || r.md !== w.md);
-    const l = chips.lim ? null : rows.reduce((a, r) => (!a || r.limGain > a.limGain ? r : a), null);
-    return { w, l };
+    const combo = (sp.combos || []).find(c => !(chips.wc && c.wc) && !(chips.lim && c.lim)) || { wc: null, lim: null, gain: 0 };
+    const row = md => sp.rows.find(r => r.md === md) || null;
+    return { combo, w: combo.wc ? row(combo.wc) : null, l: combo.lim ? row(combo.lim) : null };
   }
+  const comboTxt = c => (!c.wc && !c.lim ? 'guardar os jokers'
+    : [[c.lim, 'Limitless'], [c.wc, 'Wildcard']].filter(([md]) => md).sort((a, b) => a[0] - b[0]).map(([md, n]) => `${n} na J${md}`).join(' + '));
   function seasonHtml(sq) {
     const { fmt, esc } = A(), s = st(), key = seasonKey(sq);
     const sp = planCache.get(key) || (U.wantSeason ? later(key, () => UCLModel.seasonPlan(U.data, A().S.data?.ucl, sq.map(p => p.id), +s.bank || 0)) : null);
@@ -536,16 +544,21 @@ const UCLApp = (() => {
       <button class="btn primary" id="uSeason" ${U.wantSeason ? 'disabled' : ''}>${U.wantSeason ? '⏳ A calcular… (10-20 s)' : 'Calcular plano'}</button></div>
       <p class="note">Simula as jornadas que faltam da fase de liga com o teu plantel (com 2 transferências grátis por jornada), com o Wildcard em cada jornada e com o Limitless em cada jornada.</p>${ko}</div>`;
     const chips = s.chips, mdNow = U.data.meta.md, pk = chipPick(sp, chips);
-    const recW = chips.wc ? 'Wildcard já usado.' : pk.w.wcGain > 12 ? `<b>Wildcard na jornada ${pk.w.md}</b>${pk.w.md === mdNow ? ' (já, nesta)' : ''}: +${fmt(pk.w.wcGain)} pts até à jornada 8.` : `Wildcard: nenhuma jornada da fase de liga ganha mais de 12 pts (máx. +${fmt(pk.w.wcGain)} na J${pk.w.md}); guarda-o para quando o plantel tiver muitos lesionados.`;
-    const recL = chips.lim ? 'Limitless já usado.' : `<b>Limitless</b>: na fase de liga, a melhor é a jornada ${pk.l.md} (+${fmt(pk.l.limGain)})${pk.w && pk.w.wcGain > 12 && sp.bestL.md === pk.w.md ? ` (a J${pk.w.md} fica para o Wildcard: não dá para usar os dois na mesma jornada)` : ''}. ${pk.l.limGain > 20 ? 'Ganho grande: vale a pena usá-lo aí.' : 'Ganho moderado: também pode ficar para as eliminatórias.'}
-      <br><span class="muted">O ganho do Limitless nas jornadas seguintes foi calculado sem o Wildcard; depois de o usares, recalcula.</span>`;
+    const ok = (sp.combos || []).filter(c => !(chips.wc && c.wc) && !(chips.lim && c.lim));
+    const best = pk.combo, now = md => (md === mdNow ? ' (já, nesta jornada)' : '');
+    const recW = !best.wc && !best.lim ? 'Nenhuma combinação ganha o suficiente: guarda os jokers.'
+      : `<b>${comboTxt(best)}</b>: +${fmt(best.gain)} pts até à jornada 8 face a ficar com o plantel e usar as transferências grátis.${best.lim ? ` O Limitless${now(best.lim)} aproveita a jornada em que o teu plantel está pior.` : ''}${best.wc ? ` O Wildcard${now(best.wc)} monta o plantel para as jornadas seguintes.` : ''}
+        ${best.gain < 12 ? '<br>Ganho pequeno: também podes guardar os jokers para as eliminatórias.' : ''}`;
+    const recL = `Outras combinações: ${ok.slice(1, 5).map(c => `${comboTxt(c)} +${fmt(c.gain)}`).join(' · ')}.
+      <br><span class="muted">Os ganhos não se somam às cegas: depois de um Wildcard, o Limitless compara com o plantel do Wildcard (vale menos); o Limitless volta atrás no fim da jornada, por isso antes do Wildcard os dois somam-se.</span>`;
     return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Plano da época: quando usar os jokers <span class="sub">fase de liga, jornadas ${sp.rows[0].md}-${sp.rows[sp.rows.length - 1].md}</span></h2>
       <button class="btn" id="uSeasonRe">↻ Recalcular</button></div>
-      <div style="overflow-x:auto"><table><tr><th>Jornada</th><th>Fecho</th><th class="num">Sem jokers</th><th class="num">Limitless</th><th class="num">Ganho Limitless</th><th class="num">Ganho Wildcard <span class="muted">(até à J8)</span></th></tr>
+      <div style="overflow-x:auto"><table><tr><th>Jornada</th><th>Fecho</th><th class="num">Sem jokers</th><th class="num">Limitless</th><th class="num">Ganho Limitless</th><th class="num">Ganho Wildcard <span class="muted">(até à J8)</span></th><th>Fora do teu plantel</th></tr>
         ${sp.rows.map(r => `<tr><td><b>J${r.md}</b>${r.oneDay ? ' <span class="tag q" title="todos os jogos à mesma hora: sem trocas a meio">1 dia</span>' : ''}</td><td>${day(r.deadline)}</td><td class="num">${fmt(r.base)}</td><td class="num">${fmt(r.limitless)}</td>
-          <td class="num">${r.md === pk.l?.md ? `<b>+${fmt(r.limGain)}</b>` : '+' + fmt(r.limGain)}</td><td class="num">${r.md === pk.w?.md ? `<b>+${fmt(r.wcGain)}</b>` : '+' + fmt(r.wcGain)} <span class="muted">(${r.window} j.)</span></td></tr>`).join('')}</table></div>
+          <td class="num">${r.md === pk.l?.md ? `<b>+${fmt(r.limGain)}</b>` : '+' + fmt(r.limGain)}</td><td class="num">${r.md === pk.w?.md ? `<b>+${fmt(r.wcGain)}</b>` : '+' + fmt(r.wcGain)} <span class="muted">(${r.window} j.)</span></td>
+          <td class="muted" style="font-size:12px">${(r.out || []).map(o => esc(o.name) + (o.status === 'D' ? ' (dúvida)' : '')).join(', ') || '—'}</td></tr>`).join('')}</table></div>
       <p style="margin-top:10px">💡 ${recW}<br>💡 ${recL}</p>
-      <p class="note">Jornadas futuras sem odds (força das equipas pelos preços) e com os lesionados de hoje: refaz o cálculo em cada jornada. Diferenças de poucos pontos são ruído.</p>${ko}</div>`;
+      <p class="note">Jornadas futuras sem odds (força das equipas pelos preços). Lesionados: fora só até à data prevista de regresso do Sofascore (sem data: até ao fim; sem informação: só na jornada seguinte); "fora do teu plantel" inclui quem raramente joga. Refaz o cálculo em cada jornada; diferenças de poucos pontos são ruído.</p>${ko}</div>`;
   }
   function bindSuggest(sq) {
     const s = $('#plantel');
@@ -565,7 +578,7 @@ const UCLApp = (() => {
     $('#plantel').querySelector('.card').insertAdjacentHTML('afterend', wait(`A calcular o plantel: ${label}…`));
     setTimeout(() => {
       let squad, moves = null;
-      if (mode === 'imp') { const imp = g?.imp || UCLModel.improveSquad(U.proj.players, sq, +st().bank || 0, { maxT: (+st().freeT || 0) + (+st().extraT || 0), freeT: +st().freeT || 0 }); squad = imp.squad; moves = imp.moves; }
+      if (mode === 'imp') { const imp = g?.imp || UCLModel.improveSquad(U.proj.players, sq, +st().bank || 0, { maxT: (+st().freeT || 0) + (+st().extraT || 0), freeT: +st().freeT || 0, ahead: aheadOf() }); squad = imp.squad; moves = imp.moves; }
       else if (mode === 'wc' && planCache.get(seasonKey(sq))?.rows[0]?.md === U.data.meta.md) squad = planCache.get(seasonKey(sq)).rows[0].wcSquad.map(p => U.byId[p.id] || p);
       else if (mode === 'wc' && g) squad = g.wc.squad;
       else if (mode === 'lim' && g) squad = g.lim.squad;

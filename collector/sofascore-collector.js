@@ -159,7 +159,7 @@ async function ligaRecordCollector() {
     const home = e.homeTeam.id === t;
     next[t] = { eventId: e.id, ts: e.startTimestamp, home, oppId: (home ? e.awayTeam : e.homeTeam).id, round: e.roundInfo?.round || null };
     const l = await api(`event/${e.id}/lineups`);
-    missing[t] = (l?.[home ? 'home' : 'away']?.missingPlayers || []).map(m => ({ id: m.player.id, name: m.player.name, reason: m.description || m.reason || m.type }));
+    missing[t] = (l?.[home ? 'home' : 'away']?.missingPlayers || []).map(m => ({ id: m.player.id, name: m.player.name, reason: m.description || m.reason || m.type, until: (m.expectedEndDate || '').slice(0, 10) || null }));
     if (!odds[e.id]) {
       const o = await api(`event/${e.id}/odds/1/all`);
       const m = o?.markets?.find(m => m.marketName === 'Full time');
@@ -225,6 +225,10 @@ async function ligaRecordCollector() {
         const t = x => ({ name: x.name, short: x.shortName, code: x.nameCode });
         out.events.push({ id: e.id, ts: e.startTimestamp, round: r0, home: t(e.homeTeam), away: t(e.awayTeam),
           odds: ft ? { h: c['1'], d: c['X'], a: c['2'] } : null, over25: g.Over || null, under25: g.Under || null });
+        // ausências com a data prevista de regresso: [nome, código da equipa, 'M' fora | 'D' dúvida, 'AAAA-MM-DD' ou '']
+        const l = await api(`event/${e.id}/lineups`);
+        for (const side of ['home', 'away']) for (const m of l?.[side]?.missingPlayers || [])
+          (out.missing ||= []).push([m.player.name, (side === 'home' ? e.homeTeam : e.awayTeam).nameCode, m.type === 'missing' ? 'M' : 'D', (m.expectedEndDate || '').slice(0, 10)]);
       }
       // estatísticas jogo a jogo das jornadas já jogadas (xG, xA, remates, defesas…) para o modelo da Champions
       out.stats = [];
