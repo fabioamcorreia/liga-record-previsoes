@@ -802,13 +802,15 @@
     let b, json;
     try { b = bundle(); json = JSON.stringify(b); } catch (err) { console.error('[Publicar]', err); notice('❌ Não consegui juntar os dados: ' + esc(err.message), 'err'); return; }
     try {
-      // aberta como ficheiro (file:///) o Chrome não mostra a escolha da pasta: descarrega e o publicar.bat vai buscá-lo
-      if (!window.showDirectoryPicker || location.protocol === 'file:') throw new Error('nofs');
+      if (!window.showDirectoryPicker) throw new Error('nofs');
+      // Às vezes (visto a 24-nov, app aberta como ficheiro) o pedido de autorização do Chrome fica pendurado sem mostrar nada:
+      // dá-lhe uns segundos e, se não responder, descarrega o ficheiro (o publicar.bat vai buscá-lo às Transferências)
+      const orTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('sem resposta do Chrome'), { name: 'Timeout' })), ms))]);
       let dir = await idb.get('projDir');
-      // Com a app aberta como ficheiro (file:///) o pedido de autorização do Chrome fica pendurado sem mostrar nada:
-      // se a pasta guardada não tiver autorização, abre logo a escolha da pasta (que já dá a autorização)
-      if (dir && (await dir.queryPermission({ mode: 'readwrite' })) !== 'granted') dir = null;
-      if (!dir) step('A abrir a escolha da pasta…');
+      if (dir) {
+        step('A pedir autorização para escrever na pasta do projeto…');
+        if ((await orTimeout(dir.queryPermission({ mode: 'readwrite' }), 3000)) !== 'granted' && (await orTimeout(dir.requestPermission({ mode: 'readwrite' }), 8000)) !== 'granted') dir = null;
+      }
       if (!dir) {
         notice('Escolhe a pasta do projeto <b>liga-record-previsoes</b> (a que tem o index.html).');
         dir = await window.showDirectoryPicker({ id: 'liga-record-projeto', mode: 'readwrite' });
