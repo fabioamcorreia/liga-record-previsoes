@@ -802,7 +802,8 @@
     let b, json;
     try { b = bundle(); json = JSON.stringify(b); } catch (err) { console.error('[Publicar]', err); notice('❌ Não consegui juntar os dados: ' + esc(err.message), 'err'); return; }
     try {
-      if (!window.showDirectoryPicker) throw new Error('nofs');
+      // aberta como ficheiro (file:///) o Chrome não mostra a escolha da pasta: descarrega e o publicar.bat vai buscá-lo
+      if (!window.showDirectoryPicker || location.protocol === 'file:') throw new Error('nofs');
       let dir = await idb.get('projDir');
       // Com a app aberta como ficheiro (file:///) o pedido de autorização do Chrome fica pendurado sem mostrar nada:
       // se a pasta guardada não tiver autorização, abre logo a escolha da pasta (que já dá a autorização)
@@ -822,7 +823,7 @@
       if (err.name === 'AbortError') { notice('Publicação cancelada (a escolha da pasta foi fechada). Carrega outra vez em Publicar e escolhe a pasta <b>liga-record-previsoes</b>.', 'err'); return; }
       // sem acesso a pastas: descarrega o ficheiro para o pores em data/
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = 'sync.json'; a.click();
-      notice('Descarreguei <code>sync.json</code>: põe-no na pasta <code>data/</code> do projeto e corre <b>publicar.bat</b>.');
+      notice('✅ Descarreguei <code>sync.json</code> para as Transferências. Agora faz duplo clique em <b>publicar.bat</b> na pasta do projeto: ele vai buscá-lo e envia para o telemóvel.', 'ok');
       ls.set('syncStamp', b.created); renderSync(); return;
     }
     ls.set('syncStamp', b.created); renderSync();
