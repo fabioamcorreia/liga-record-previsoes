@@ -597,14 +597,15 @@ const UCLApp = (() => {
     const sg = x => `<span class="${x >= 0.05 ? 'good' : x <= -0.05 ? 'bad' : 'muted'}">${x >= 0 ? '+' : ''}${fmt(x)}</span>`;
     const info = p => `${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} · joga ${pct(p.pPlay)} · ${p.pos === 'G' || p.pos === 'D' ? 'baliza 0 ' + pct(p.pCS) : 'golo ' + pct(p.Pg)}${p.form != null ? ' · forma ' + fmt(p.form) : ''}`;
     const money = b.mode === 'lim' ? null : b.value0 + b.bank0 - b.cost;
-    const ord = A().ls.get('chgOrder', 'gain');
+    const ord = A().ls.get('chgOrder', 'gain'), mineNow = new Set(st().squad);
     return `<div class="row" style="justify-content:space-between;margin:12px 0 6px"><h2 style="margin:0">Jogador a jogador <span class="sub">cada troca simulada por ordem (jornada com as trocas ao intervalo); o ganho de um jogador depende dos que já entraram</span></h2>
       <label>Ordenar <select id="uChgOrder"><option value="gain" ${ord === 'gain' ? 'selected' : ''}>por ganho</option><option value="pos" ${ord === 'pos' ? 'selected' : ''}>por posição</option></select></label></div>
-      <div style="overflow-x:auto"><table><tr><th>#</th><th>Sai</th><th class="num">Pts</th><th>Entra</th><th class="num">Pts</th><th class="num">Δ preço</th><th class="num">Ganho</th><th class="num">Total</th></tr>
-        <tr><td></td><td colspan="5" class="muted">Plantel atual</td><td></td><td class="num">${fmt(ex.base)}</td></tr>
+      <div style="overflow-x:auto"><table><tr><th>#</th><th>Sai</th><th class="num">Pts</th><th>Entra</th><th class="num">Pts</th><th class="num">Δ preço</th><th class="num">Ganho</th><th class="num">Total</th><th></th></tr>
+        <tr><td></td><td colspan="5" class="muted">Plantel atual</td><td></td><td class="num">${fmt(ex.base)}</td><td></td></tr>
         ${ex.steps.map((t, i) => `<tr><td>${i + 1}</td><td>${posTag(t.out.pos)} ${esc(t.out.name)}<br><span class="muted">${info(t.out)}</span></td><td class="num">${fmt(t.out.pts)}</td>
           <td><b>${esc(t.in.name)}</b><br><span class="muted">${info(t.in)}</span></td><td class="num">${fmt(t.in.pts)}</td>
-          <td class="num">${t.cost >= 0 ? '+' : ''}${fmt(t.cost)} M€</td><td class="num"><b>${sg(t.gain)}</b></td><td class="num">${fmt(t.ev)}</td></tr>`).join('')}
+          <td class="num">${t.cost >= 0 ? '+' : ''}${fmt(t.cost)} M€</td><td class="num"><b>${sg(t.gain)}</b></td><td class="num">${fmt(t.ev)}</td>
+          <td>${mineNow.has(t.in.id) && !mineNow.has(t.out.id) ? '<span class="good">✓ aceite</span>' : mineNow.has(t.out.id) && !mineNow.has(t.in.id) ? `<button class="btn uAcc" data-i="${i}">Aceitar</button>` : '<span class="muted">—</span>'}</td></tr>`).join('')}
       </table></div>
       <p class="note">Total: <b>${sg(ex.ev - ex.base)}</b> pts esperados nesta jornada${hits ? ` (−${hits} pelas transferências a mais → ${sg(ex.ev - ex.base - hits)})` : ''} · ${ex.steps.length} troca${ex.steps.length === 1 ? '' : 's'}${money != null ? ` · saldo final ${m1(money)}` : ' · Limitless: sem orçamento'}.
         "Pts" = pontos esperados do jogador nesta jornada; o ganho é a diferença no total do plantel (conta quem fica no banco e as trocas ao intervalo).
@@ -613,7 +614,8 @@ const UCLApp = (() => {
   function builtHtml() {
     const { esc, fmt, posTag } = A(), b = U.built, mine = new Set(st().squad), inXI = new Set(b.pl.xi.map(p => p.id));
     return `<div class="card" style="background:var(--soft)"><div class="row" style="justify-content:space-between"><h2>Plantel sugerido: ${esc(b.label)} <span class="sub">${m1(b.cost)} · ${fmt(b.pl.ev)} pts esperados nesta jornada (com as trocas ao intervalo)</span></h2>
-      <div class="row"><button class="btn primary" id="uUseBuilt">Usar este plantel</button><button class="btn" id="uCloseBuilt">Fechar</button></div></div>
+      <div class="row"><button class="btn primary" id="uUseBuilt" title="aceita todas as trocas da tabela">Aceitar todas</button><button class="btn" id="uCloseBuilt">Fechar</button></div></div>
+      <p class="note">Aceita troca a troca (botão em cada linha) ou todas de uma vez. ${b.mode === 'lim' ? 'Limitless: a app guarda o teu plantel de antes, para o repores depois desta jornada.' : 'Cada troca respeita o saldo e o máximo de 3 por clube.'} ${b.mode === 'wc' || b.mode === 'lim' ? `Lembra-te de marcar o ${b.mode === 'wc' ? 'Wildcard' : 'Limitless'} como usado na Sugestão da jornada.` : ''}</p>
       ${changesHtml(b)}
       <div class="list">${b.squad.slice().sort((x, y) => 'GDMF'.indexOf(x.pos) - 'GDMF'.indexOf(y.pos) || y.pts - x.pts).map(p => `<div class="li">${posTag(p.pos)}<div class="grow"><b>${esc(p.name)}</b>${mine.has(p.id) ? ' <span class="good">✓ já tens</span>' : ''}<span>${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} · ${m1(p.price)}${inXI.has(p.id) ? '' : ' · banco'}</span></div><span class="pts ${p.id === b.pl.captain.id ? 'hi' : ''}">${fmt(p.pts)}${p.id === b.pl.captain.id ? ' ©' : ''}</span></div>`).join('')}</div>
       <p class="note">${b.mode === 'lim' ? 'Limitless: o plantel volta ao teu depois desta jornada.' : b.mode === 'wc' ? (planCache.get(seasonKey(squadP()))?.rows[0]?.md === U.data.meta.md ? 'Wildcard: plantel escolhido para as jornadas que faltam da fase de liga (plano da época).' : 'Wildcard: escolhido só por esta jornada; calcula o plano da época para um plantel pensado para várias jornadas.') : 'Escolhido pelos pontos desta jornada.'}</p></div>`;
@@ -639,6 +641,7 @@ const UCLApp = (() => {
         <span class="note">ou carrega em <b>+</b> no separador Ranking</span>
         <span class="grow"></span>
         <label>Sugerir plantel <select id="uBuildMode"><option value="">escolhe…</option><option value="imp">com as minhas transferências</option><option value="wc">Wildcard (orçamento atual)</option><option value="lim">Limitless (sem orçamento)</option><option value="new">equipa nova (100 M€)</option></select></label></div>
+      ${A().ls.get('ucl.squadBeforeLim', null) ? `<p class="warn">Plantel do Limitless ativo (jornada ${A().ls.get('ucl.squadBeforeLim').md}). Depois desta jornada o teu plantel volta ao de antes: <button class="btn" id="uRestoreLim">↺ Repor o plantel de antes do Limitless</button></p>` : ''}
       ${U.built ? builtHtml() : ''}
       <table><tr><th>Pos</th><th>Jogador</th><th>Jogo</th><th class="num">Pts esp.</th><th>Disponibilidade</th><th class="num">Preço</th><th></th></tr>
       ${sq.sort((a, b) => 'GDMF'.indexOf(a.pos) - 'GDMF'.indexOf(b.pos) || b.pts - a.pts).map(p => `<tr><td>${posTag(p.pos)}</td><td><b>${esc(p.name)}</b>${p.status ? ` <span class="warn">${esc(p.status)}</span>` : ''}</td>
@@ -652,7 +655,24 @@ const UCLApp = (() => {
     $('#uBuildMode').onchange = e => buildFor(sq, e.target.value);
     const co = $('#uChgOrder'); if (co) co.onchange = e => { A().ls.set('chgOrder', e.target.value); co.disabled = true;
       setTimeout(() => { U.built.ex = UCLModel.explainChanges(U.built.old, U.built.squad, { order: e.target.value }); renderPlantel(); }, 30); };
-    const ub = $('#uUseBuilt'); if (ub) ub.onclick = () => { if (!confirm('Substituir o teu plantel por este?')) return; put('squad', U.built.squad.map(p => p.id)); put('lineup', null); U.built = null; recompute(); };
+    // aceitar trocas do plantel sugerido: uma a uma ou todas (Limitless: guarda o plantel de antes para o repor)
+    const keepBeforeLim = () => { if (U.built.mode === 'lim' && !A().ls.get('ucl.squadBeforeLim', null)) put('squadBeforeLim', { squad: st().squad, bank: st().bank, md: U.data.meta.md }); };
+    const ub = $('#uUseBuilt'); if (ub) ub.onclick = () => { if (!confirm('Aceitar todas as trocas e substituir o teu plantel por este?')) return;
+      keepBeforeLim(); const b = U.built; put('squad', b.squad.map(p => p.id)); if (b.mode !== 'lim') put('bank', +(b.value0 + b.bank0 - b.cost).toFixed(1));
+      put('lineup', null); U.built = null; recompute(); A().notice('✅ Plantel atualizado com todas as trocas.', 'ok'); };
+    el.querySelectorAll('.uAcc').forEach(x => x.onclick = () => {
+      const b = U.built, t = b.ex.steps[+x.dataset.i], s = st(), { esc } = A();
+      const squad = s.squad.map(id => (id === t.out.id ? t.in.id : id));
+      const team = id => (U.byId[id] || U.data.players.find(p => p.id === id))?.teamId ?? (U.byId[id] || U.data.players.find(p => p.id === id))?.tId;
+      const n = squad.filter(id => team(id) === team(t.in.id)).length;
+      if (n > 3) return A().notice(`❌ ${esc(t.in.name)} seria o ${n}.º jogador do mesmo clube (máximo 3). Aceita primeiro a troca que tira um deles.`, 'err');
+      const bank = +(s.bank - (t.in.price - t.out.price)).toFixed(1);
+      if (b.mode !== 'lim' && bank < -0.05) return A().notice(`❌ ${esc(t.out.name)} → ${esc(t.in.name)} passa o orçamento em ${(-bank).toFixed(1).replace('.', ',')} M€. Aceita primeiro as trocas que libertam dinheiro.`, 'err');
+      keepBeforeLim(); put('squad', squad); if (b.mode !== 'lim') put('bank', bank); put('lineup', null);
+      recompute(); A().notice(`✅ ${esc(t.out.name)} → ${esc(t.in.name)} aceite${b.mode !== 'lim' ? ` · saldo ${bank.toFixed(1).replace('.', ',')} M€` : ''}.`, 'ok');
+    });
+    const rl = $('#uRestoreLim'); if (rl) rl.onclick = () => { const o = A().ls.get('ucl.squadBeforeLim'); if (!confirm('Voltar ao plantel de antes do Limitless?')) return;
+      put('squad', o.squad); put('bank', o.bank); put('lineup', null); A().ls.set('ucl.squadBeforeLim', null); recompute(); A().notice('✅ Plantel de antes do Limitless reposto.', 'ok'); };
     const uc = $('#uCloseBuilt'); if (uc) uc.onclick = () => { U.built = null; renderPlantel(); };
     $('#uBank2').onchange = e => { put('bank', +e.target.value || 0); recompute(); };
     $('#uName').onchange = e => { put('name', e.target.value); header(); };
@@ -667,11 +687,11 @@ const UCLApp = (() => {
   }
 
   // sincronização PC → telemóvel
-  const bundle = () => { const s = st(); return { data: U.data, squad: s.squad, bank: s.bank, avail: s.avail, lineup: s.lineup, freeT: s.freeT, extraT: s.extraT, chips: s.chips, name: s.name, history: A().ls.get('ucl.history', {}) }; };
+  const bundle = () => { const s = st(); return { data: U.data, squad: s.squad, bank: s.bank, avail: s.avail, lineup: s.lineup, freeT: s.freeT, extraT: s.extraT, chips: s.chips, name: s.name, history: A().ls.get('ucl.history', {}), squadBeforeLim: A().ls.get('ucl.squadBeforeLim', null) }; };
   async function applyBundle(b) {
     if (!b) return;
     if (b.data) { U.data = b.data; await A().idb.set('ucl', b.data); }
-    if (Array.isArray(b.squad) && b.squad.length) for (const k of ['squad', 'bank', 'avail', 'lineup', 'freeT', 'extraT', 'chips', 'name', 'history']) if (b[k] !== undefined) put(k, b[k]);
+    if (Array.isArray(b.squad) && b.squad.length) for (const k of ['squad', 'bank', 'avail', 'lineup', 'freeT', 'extraT', 'chips', 'name', 'history', 'squadBeforeLim']) if (b[k] !== undefined) put(k, b[k]);
   }
 
   return { init, setData, recompute, renderAll, renderTrocas, renderPlantel, header, tick, bundle, applyBundle, SITE };
