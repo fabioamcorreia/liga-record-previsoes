@@ -475,7 +475,8 @@ const UCLModel = (() => {
   }
 
   // Projeção de uma jornada futura da fase de liga (sem odds: força das equipas pelos preços; o xG/xA conta na mesma)
-  const projectMd = (data, md, sofaUcl) => project({ ...data, meta: { ...data.meta, md } }, md === data.meta.md ? sofaUcl : sofaUcl?.stats ? { stats: sofaUcl.stats } : null);
+  // fix(p, md) → jogador com o estado dessa jornada (ex.: lesionado só até à data prevista de regresso)
+  const projectMd = (data, md, sofaUcl, fix) => project({ ...data, players: fix ? data.players.map(p => fix(p, md)) : data.players, meta: { ...data.meta, md } }, md === data.meta.md ? sofaUcl : sofaUcl?.stats ? { stats: sofaUcl.stats } : null);
   // jogadores com os pontos somados de várias jornadas (para escolher um plantel para um período)
   function combine(projs) {
     const by = {};
@@ -486,9 +487,9 @@ const UCLModel = (() => {
   // Plano dos jokers até ao fim da fase de liga (jornada 8): por jornada, o que daria o Limitless (só nessa jornada,
   // sem orçamento) e o Wildcard (plantel novo dessa jornada até à 8, com o orçamento atual) face a ficar com o plantel
   // e usar as transferências grátis (2 por jornada, guloso pelo onze esperado).
-  function seasonPlan(data, sofaUcl, squadIds, bank, { lastMd = 8, maxPerClub = 3, onStep } = {}) {
+  function seasonPlan(data, sofaUcl, squadIds, bank, { lastMd = 8, maxPerClub = 3, onStep, fix } = {}) {
     const mds = data.fixtures.filter(f => f.md >= data.meta.md && f.md <= lastMd && f.matches.length).map(f => f.md).sort((a, b) => a - b);
-    const P = {}; for (const md of mds) { P[md] = projectMd(data, md, sofaUcl); P[md].byId = Object.fromEntries(P[md].players.map(p => [p.id, p])); }
+    const P = {}; for (const md of mds) { P[md] = projectMd(data, md, sofaUcl, fix); P[md].byId = Object.fromEntries(P[md].players.map(p => [p.id, p])); }
     const at = (ids, md) => ids.map(id => P[md].byId[id]).filter(Boolean);
     const ev = (ids, md) => { const sq = at(ids, md); return sq.length === 15 ? plan(sq, { n: 300, iters: 2 }).ev : 0; };
     const value = ids => at(ids, mds[0]).reduce((s, p) => s + p.price, 0);

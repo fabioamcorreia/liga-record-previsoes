@@ -795,11 +795,16 @@
     $('#btnSync').hidden = onWeb; // no telemóvel não há nada para publicar
   }
   $('#btnSync').onclick = async () => {
+    // cada passo fica na consola (F12) e no aviso do topo, para se ver onde para
+    const step = (t, kind = '') => { console.log('[Publicar]', t); notice(t, kind); };
+    step('A publicar…');
     if (!S.data) { notice('Atualiza primeiro os dados do Sofascore.', 'err'); return; }
-    const b = bundle(); const json = JSON.stringify(b);
+    let b, json;
+    try { b = bundle(); json = JSON.stringify(b); } catch (err) { console.error('[Publicar]', err); notice('❌ Não consegui juntar os dados: ' + esc(err.message), 'err'); return; }
     try {
       if (!window.showDirectoryPicker) throw new Error('nofs');
       let dir = await idb.get('projDir');
+      step(dir ? 'A pedir autorização para escrever na pasta do projeto…' : 'A abrir a escolha da pasta…');
       if (dir && (await dir.queryPermission({ mode: 'readwrite' })) !== 'granted' && (await dir.requestPermission({ mode: 'readwrite' })) !== 'granted') dir = null;
       if (!dir) {
         notice('Escolhe a pasta do projeto <b>liga-record-previsoes</b> (a que tem o index.html).');
@@ -811,7 +816,8 @@
       const w = await (await dataDir.getFileHandle('sync.json', { create: true })).createWritable();
       await w.write(json); await w.close();
     } catch (err) {
-      if (err.name === 'AbortError') return;
+      console.error('[Publicar]', err);
+      if (err.name === 'AbortError') { notice('Publicação cancelada (a escolha da pasta foi fechada). Carrega outra vez em Publicar e escolhe a pasta <b>liga-record-previsoes</b>.', 'err'); return; }
       // sem acesso a pastas: descarrega o ficheiro para o pores em data/
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = 'sync.json'; a.click();
       notice('Descarreguei <code>sync.json</code>: põe-no na pasta <code>data/</code> do projeto e corre <b>publicar.bat</b>.');
