@@ -388,10 +388,12 @@ const UCLApp = (() => {
         <p class="note">Fase de liga: 2 transferências grátis por jornada (só 1 passa para a seguinte); cada transferência a mais custa −4 pts. Máximo 3 jogadores por clube. Preço de venda = preço atual.</p>
         ${pair ? `<h2 style="margin-top:12px">Melhor par de transferências <span class="pts hi">+${fmt(pair.gain)}</span></h2><div class="swaps">${card(pair.a)}${card(pair.b)}</div>
           ${s.freeT < 2 ? `<p class="warn">Só tens ${s.freeT} grátis: a 2.ª custa −4 pts${pair.b.gain > 4 ? ', e mesmo assim compensa' : ', e não compensa'}.</p>` : ''}` : '<p class="muted">Sem transferências que melhorem o onze dentro do saldo.</p>'}
-        <h2 style="margin-top:16px">Melhor troca para cada jogador</h2>
-        <div class="swaps">${top.map(card).join('') || '<p class="muted">Nenhuma troca melhora o onze.</p>'}</div>
+        <div class="row" style="justify-content:space-between;margin-top:16px"><h2 style="margin:0">Melhor troca para cada jogador</h2>
+          <label>Ordenar <select id="uTrOrder"><option value="gain" ${A().ls.get('trOrder', 'gain') === 'gain' ? 'selected' : ''}>por ganho</option><option value="pos" ${A().ls.get('trOrder', 'gain') === 'pos' ? 'selected' : ''}>por posição</option></select></label></div>
+        <div class="swaps">${(A().ls.get('trOrder', 'gain') === 'pos' ? top.slice().sort((a, b) => 'GDMF'.indexOf(a.out.pos) - 'GDMF'.indexOf(b.out.pos) || b.gain + b.gainAhead - a.gain - a.gainAhead) : top).map(card).join('') || '<p class="muted">Nenhuma troca melhora o onze.</p>'}</div>
         <p class="note">Olha só para esta jornada. Antes de vender alguém pensa nas jornadas seguintes, e no teu plantel convém ter jogadores que joguem em dias diferentes.</p></div>`;
     $('#uBank').onchange = e => { put('bank', +e.target.value || 0); renderTrocas(); renderOnze(); };
+    $('#uTrOrder').onchange = e => { A().ls.set('trOrder', e.target.value); renderTrocas(); };
     $('#uFree').onchange = e => { put('freeT', +e.target.value || 0); renderTrocas(); renderOnze(); };
   }
 
@@ -583,7 +585,7 @@ const UCLApp = (() => {
       else if (mode === 'wc' && g) squad = g.wc.squad;
       else if (mode === 'lim' && g) squad = g.lim.squad;
       else squad = UCLModel.buildSquad(U.proj.players, mode === 'lim' ? 999 : mode === 'wc' ? sqValue(sq) + (+st().bank || 0) : 100, 3).squad;
-      U.built = { squad, cost: sqValue(squad), pl: UCLModel.plan(squad), moves, label, mode, ex: UCLModel.explainChanges(sq, squad), bank0: +st().bank || 0, value0: sqValue(sq) };
+      U.built = { squad, cost: sqValue(squad), pl: UCLModel.plan(squad), moves, label, mode, ex: UCLModel.explainChanges(sq, squad, { order: A().ls.get('chgOrder', 'gain') }), old: sq, bank0: +st().bank || 0, value0: sqValue(sq) };
       renderPlantel();
     }, 60);
   }
@@ -595,7 +597,9 @@ const UCLApp = (() => {
     const sg = x => `<span class="${x >= 0.05 ? 'good' : x <= -0.05 ? 'bad' : 'muted'}">${x >= 0 ? '+' : ''}${fmt(x)}</span>`;
     const info = p => `${esc(p.team)} ${esc(p.opp)} · ${day(p.ts)} · joga ${pct(p.pPlay)} · ${p.pos === 'G' || p.pos === 'D' ? 'baliza 0 ' + pct(p.pCS) : 'golo ' + pct(p.Pg)}${p.form != null ? ' · forma ' + fmt(p.form) : ''}`;
     const money = b.mode === 'lim' ? null : b.value0 + b.bank0 - b.cost;
-    return `<h2 style="margin:12px 0 6px">Jogador a jogador <span class="sub">cada troca simulada por ordem (jornada com as trocas ao intervalo); o ganho de um jogador depende dos que já entraram</span></h2>
+    const ord = A().ls.get('chgOrder', 'gain');
+    return `<div class="row" style="justify-content:space-between;margin:12px 0 6px"><h2 style="margin:0">Jogador a jogador <span class="sub">cada troca simulada por ordem (jornada com as trocas ao intervalo); o ganho de um jogador depende dos que já entraram</span></h2>
+      <label>Ordenar <select id="uChgOrder"><option value="gain" ${ord === 'gain' ? 'selected' : ''}>por ganho</option><option value="pos" ${ord === 'pos' ? 'selected' : ''}>por posição</option></select></label></div>
       <div style="overflow-x:auto"><table><tr><th>#</th><th>Sai</th><th class="num">Pts</th><th>Entra</th><th class="num">Pts</th><th class="num">Δ preço</th><th class="num">Ganho</th><th class="num">Total</th></tr>
         <tr><td></td><td colspan="5" class="muted">Plantel atual</td><td></td><td class="num">${fmt(ex.base)}</td></tr>
         ${ex.steps.map((t, i) => `<tr><td>${i + 1}</td><td>${posTag(t.out.pos)} ${esc(t.out.name)}<br><span class="muted">${info(t.out)}</span></td><td class="num">${fmt(t.out.pts)}</td>
@@ -646,6 +650,8 @@ const UCLApp = (() => {
       ${seasonHtml(sq)}`;
     bindSuggest(sq);
     $('#uBuildMode').onchange = e => buildFor(sq, e.target.value);
+    const co = $('#uChgOrder'); if (co) co.onchange = e => { A().ls.set('chgOrder', e.target.value); co.disabled = true;
+      setTimeout(() => { U.built.ex = UCLModel.explainChanges(U.built.old, U.built.squad, { order: e.target.value }); renderPlantel(); }, 30); };
     const ub = $('#uUseBuilt'); if (ub) ub.onclick = () => { if (!confirm('Substituir o teu plantel por este?')) return; put('squad', U.built.squad.map(p => p.id)); put('lineup', null); U.built = null; recompute(); };
     const uc = $('#uCloseBuilt'); if (uc) uc.onclick = () => { U.built = null; renderPlantel(); };
     $('#uBank2').onchange = e => { put('bank', +e.target.value || 0); recompute(); };

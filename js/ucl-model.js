@@ -462,7 +462,8 @@ const UCLModel = (() => {
 
   // De um plantel para outro, troca a troca: emparelha por posição (o melhor que sai com o melhor que entra), ordena
   // pelo ganho esperado de cada par e simula a jornada depois de cada troca → ganho de cada jogador e total acumulado.
-  function explainChanges(oldSq, newSq, { n = 300 } = {}) {
+  // order: 'gain' = maior ganho primeiro · 'pos' = por posição (GR, DEF, MED, AV) e, dentro de cada uma, por ganho
+  function explainChanges(oldSq, newSq, { n = 300, order = 'gain' } = {}) {
     const keep = new Set(newSq.map(p => p.id)), had = new Set(oldSq.map(p => p.id));
     const pairs = [];
     for (const pos of ['G', 'D', 'M', 'F']) {
@@ -470,7 +471,7 @@ const UCLModel = (() => {
       const ins = newSq.filter(p => p.pos === pos && !had.has(p.id)).sort((a, b) => b.pts - a.pts);
       outs.forEach((o, i) => ins[i] && pairs.push({ out: o, in: ins[i] }));
     }
-    pairs.sort((a, b) => (b.in.pts - b.out.pts) - (a.in.pts - a.out.pts));
+    pairs.sort((a, b) => (order === 'pos' ? 'GDMF'.indexOf(a.out.pos) - 'GDMF'.indexOf(b.out.pos) : 0) || (b.in.pts - b.out.pts) - (a.in.pts - a.out.pts));
     let sq = oldSq.slice(), prev = plan(sq, { n, iters: 2 }).ev; const base = prev, steps = [];
     for (const t of pairs) {
       sq = sq.map(p => (p.id === t.out.id ? t.in : p));

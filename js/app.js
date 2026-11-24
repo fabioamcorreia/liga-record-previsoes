@@ -441,6 +441,9 @@
     // uma linha por jogador que entra (a melhor saída para ele)
     const seen = new Set(); list = list.filter(t => { if (seen.has(t.in.id)) return false; seen.add(t.in.id); return true; });
     if (S.onlyAffordable) list = list.filter(t => t.affordable);
+    const byPos = ls.get('trOrder', 'gain') === 'pos';
+    // escolhe as melhores pelo ganho e só depois arruma por posição
+    const ord = arr => (byPos ? arr.slice().sort((a, b) => 'GDMF'.indexOf(a.out.pos) - 'GDMF'.indexOf(b.out.pos) || b.gain - a.gain) : arr);
     const fit = t => (t.affordable == null ? '<span class="tag q">preço?</span>' : t.affordable ? '<span class="tag ok">cabe no saldo</span>' : '<span class="tag no">não cabe</span>');
     const card = t => `<div class="swap"><span class="gain" title="pontos esperados a mais nesta jornada">${t.gain > 0 ? '+' : ''}${fmt(t.gain)} pts</span>${posTag(t.out.pos)} <span class="note">ganho esperado</span>
       <div class="who"><div><span>Sai</span><b>${esc(t.out.name)}</b><span>${esc(t.out.team)} · ${eur(t.sell) || '?'}${absenceTag(t.out)}</span></div><div class="arrow">→</div>
@@ -448,11 +451,12 @@
       <div class="foot"><span>Preço <input type="number" step="0.05" class="small price" data-id="${t.in.id}" value="${S.prices[t.in.id] ?? ''}" placeholder="M€"></span>${fit(t)}</div></div>`;
     el.innerHTML = `
       <div class="row" style="justify-content:space-between;margin-bottom:12px"><h2 style="margin:0;font-size:16px">Melhores trocas para a próxima jornada <span class="sub note">saldo ${eur(+S.saldo || 0)}</span></h2>
-        <label class="chip" style="cursor:pointer;padding:6px 12px"><input type="checkbox" id="onlyAff" ${S.onlyAffordable ? 'checked' : ''}> Só as que cabem no saldo</label></div>
-      ${list.length ? `<div class="swaps">${list.slice(0, 6).map(card).join('')}</div>` : '<div class="card empty"><span class="ic">🔍</span>Nenhuma troca com estes filtros. Escreve os preços de quem entra para validar o saldo.</div>'}
+        <div class="row"><label>Ordenar <select id="trOrder"><option value="gain" ${byPos ? '' : 'selected'}>por ganho</option><option value="pos" ${byPos ? 'selected' : ''}>por posição</option></select></label>
+        <label class="chip" style="cursor:pointer;padding:6px 12px"><input type="checkbox" id="onlyAff" ${S.onlyAffordable ? 'checked' : ''}> Só as que cabem no saldo</label></div></div>
+      ${list.length ? `<div class="swaps">${ord(list.slice(0, 6)).map(card).join('')}</div>` : '<div class="card empty"><span class="ic">🔍</span>Nenhuma troca com estes filtros. Escreve os preços de quem entra para validar o saldo.</div>'}
       <div class="card"><h2>Todas as opções <span class="sub">"Ganho" = pontos esperados a mais no onze ideal (com capitão) nesta jornada · escreve o preço de quem entra para validar o saldo</span></h2>
         <div class="tbl"><table><tr><th>Pos</th><th>Sai</th><th class="num">Preço</th><th>Entra</th><th>Jogo</th><th class="num">Preço</th><th class="num">Ganho jornada</th><th class="num">Δ LR/ronda</th><th class="num">Joga</th><th class="num">Saldo final</th><th>Orçamento</th></tr>
-        ${list.slice(0, 60).map(t => `<tr><td>${posTag(t.out.pos)}</td><td>${esc(t.out.name)}</td><td class="num">${eur(t.sell)}</td>
+        ${ord(list.slice(0, 60)).map(t => `<tr><td>${posTag(t.out.pos)}</td><td>${esc(t.out.name)}</td><td class="num">${eur(t.sell)}</td>
           <td><b>${esc(t.in.name)}</b> <span class="muted">${esc(t.in.team)}</span></td><td>${esc(t.in.opp)}</td>
           <td class="num"><input type="number" step="0.05" class="small price" data-id="${t.in.id}" value="${S.prices[t.in.id] ?? ''}" placeholder="M€"></td>
           <td class="num ${t.gain > 0 ? 'good' : 'bad'}"><b>${t.gain > 0 ? '+' : ''}${fmt(t.gain)}</b></td><td class="num">${t.in.lrAvg != null || t.out.lrAvg != null ? (t.lrAvgDiff > 0 ? '+' : '') + fmt(t.lrAvgDiff) : '–'}</td>
@@ -461,6 +465,7 @@
         </table></div>
       </div>`;
     $('#onlyAff').onchange = e => { S.onlyAffordable = e.target.checked; renderTrocas(); };
+    $('#trOrder').onchange = e => { ls.set('trOrder', e.target.value); renderTrocas(); };
   }
 
   function renderRanking() {
