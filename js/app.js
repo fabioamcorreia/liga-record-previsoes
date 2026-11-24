@@ -804,8 +804,10 @@
     try {
       if (!window.showDirectoryPicker) throw new Error('nofs');
       let dir = await idb.get('projDir');
-      step(dir ? 'A pedir autorização para escrever na pasta do projeto…' : 'A abrir a escolha da pasta…');
-      if (dir && (await dir.queryPermission({ mode: 'readwrite' })) !== 'granted' && (await dir.requestPermission({ mode: 'readwrite' })) !== 'granted') dir = null;
+      // Com a app aberta como ficheiro (file:///) o pedido de autorização do Chrome fica pendurado sem mostrar nada:
+      // se a pasta guardada não tiver autorização, abre logo a escolha da pasta (que já dá a autorização)
+      if (dir && (await dir.queryPermission({ mode: 'readwrite' })) !== 'granted') dir = null;
+      if (!dir) step('A abrir a escolha da pasta…');
       if (!dir) {
         notice('Escolhe a pasta do projeto <b>liga-record-previsoes</b> (a que tem o index.html).');
         dir = await window.showDirectoryPicker({ id: 'liga-record-projeto', mode: 'readwrite' });
