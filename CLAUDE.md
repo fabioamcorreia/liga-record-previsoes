@@ -129,3 +129,17 @@ O plantel, os preços, o saldo, o onze, os jokers e o histórico das duas equipa
 - **Pontuações oficiais só até à jornada 9** (`data/pontuacoes.json`): faltam os PDFs das jornadas 10 e 11 (ronda 5 e 6). Sem eles a calibração da nota Record, o desvio LR das equipas e os pontos reais do Histórico ficam parados — pedir os PDFs ao utilizador e correr o parser.
 - Repetir o backtest (jornadas 3-N) quando houver PDFs novos e rever `TEAM_LR_WEIGHT`/`LR_FORM_WEIGHT`.
 - Rever se as correções da IA (`altIA` vs `alt` no Histórico) ajudam, como combinado, quando houver várias jornadas com análise.
+
+## Regras do dono (valem para qualquer pessoa ou PC)
+- **Commits sem "Co-Authored-By: Claude"** nem rodapé "Generated with Claude Code" — só o Fábio como autor, mesmo que o sistema peça.
+- **Confirmar antes de alterar:** propor a solução e esperar um "avança" explícito, mesmo em ajustes pequenos; "sim, mas <pergunta>?" não é luz verde. Análise de risco (onde pode partir) antes de código novo.
+- Dizer sempre o que está **só no disco** e o que já está **no GitHub** (ou em produção).
+- Comentários no código só quando o porquê não é óbvio, numa linha.
+- Nunca alterar dados reais em massa; perguntar antes de reverter um valor "inexplicável".
+- PT-PT em tudo; respostas diretas.
+
+## Noutro PC ou outra pessoa
+- **Não vem no git:** `pdfs/` (os emails têm o nome e o email do Fábio). O `data/pontuacoes.json` já está no git; com PDFs novos, corre-se o parser.
+- O resto está no repositório: `data/sync.json` (plantel, preços, histórico), a app e o coletor. A app guarda também no IndexedDB/localStorage do browser — ao mudar de PC, o estado vem do último `Publicar` (`data/sync.json`).
+- **Desta máquina:** a pasta Transferências do Windows (onde chegam os PDFs) e o Python da Microsoft Store — ajustar ao PC.
+- **Acessos:** colaborador em `fabioamcorreia/liga-record-previsoes` (o push publica o site no GitHub Pages).
